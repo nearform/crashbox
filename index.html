@@ -1,0 +1,159 @@
+<!--
+
+Local development server:
+
+```sh
+$ npx serve
+```
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      href="https://nearform.com/favicon.ico"
+      type="image/x-icon"
+      sizes="32x32"
+    />
+    <link
+      rel="icon"
+      href="https://nearform.com/favicon.ico"
+      type="image/x-icon"
+    />
+    <link
+      rel="icon"
+      href="https://nearform.com/favicon.svg"
+      type="image/svg+xml"
+      media="(prefers-color-scheme: dark)"
+    />
+    <link rel="icon" href="https://nearform.com/favicon.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      type="text/css"
+      href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css"
+    />
+    <link
+      rel="stylesheet"
+      type="text/css"
+      href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/purecss@3.0.0/build/pure-min.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/purecss@3.0.0/build/grids-responsive-min.css"
+    />
+    <style>
+      body {
+        font-family:
+          "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        line-height: 1.6;
+        color: #1a1a1a;
+        background: linear-gradient(135deg, #f5f7fa 0%, #e9ecef 100%);
+        min-height: 100vh;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .header {
+        text-align: center;
+        margin-bottom: 40px;
+        padding: 40px 20px;
+        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      .header h1 {
+        margin: 0;
+        color: #2d3748;
+        font-size: 2.75em;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      .header p {
+        margin: 16px 0 0 0;
+        color: #4a5568;
+        font-size: 1.2em;
+        font-weight: 400;
+      }
+      .demo-section {
+        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        margin-bottom: 24px;
+        padding: 32px;
+      }
+      .demo-section h2 {
+        color: #2d3748;
+        font-weight: 600;
+        margin-top: 0;
+        margin-bottom: 24px;
+        font-size: 1.5em;
+        letter-spacing: -0.01em;
+      }
+    </style>
+    <title>crashbox Demo</title>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "htm": "https://esm.sh/htm@3.1.1?dev&external=react,react-dom",
+          "react": "https://esm.sh/react@19.1.0?dev&external=react,react-dom",
+          "react/jsx-runtime": "https://esm.sh/react@19.1.0/jsx-runtime?dev&external=react,react-dom",
+          "react-dom": "https://esm.sh/react-dom@19.1.0?dev&external=react,react-dom",
+          "react-dom/client": "https://esm.sh/react-dom@19.1.0/client?dev&external=react,react-dom"
+        }
+      }
+    </script>
+    <script type="module">
+      import React from "react";
+      import { createRoot } from "react-dom/client";
+      import htm from "htm";
+      // eslint-disable-next-line no-unused-vars
+      import * as crashbox from "./src/index.js";
+
+      const html = htm.bind(React.createElement);
+
+      const App = () => html`
+        <div className="container">
+          <div className="header">
+            <h1>crashbox</h1>
+            <p>
+              Local-first crash black box for the browser. Survives hard tab
+              kills and surfaces the recovered state on next load.
+            </p>
+          </div>
+          <div className="demo-section">
+            <h2>Demo coming soon</h2>
+            <p>TODO: build the crashbox demo here.</p>
+          </div>
+        </div>
+      `;
+
+      const root = createRoot(document.getElementById("root"));
+      root.render(html`<${App} />`);
+    </script>
+  </body>
+</html>

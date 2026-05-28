@@ -1,0 +1,53 @@
+{
+  "name": "crashbox",
+  "private": false,
+  "version": "0.0.1",
+  "description": "Local-first crash black box for the browser: survives hard tab kills (WebGPU, WASM, in-browser LLM OOM) and surfaces the recovered state on next load.",
+  "license": "MIT",
+  "author": "Ryan Roemer <ryan.roemer@nearform.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nearform/crashbox.git"
+  },
+  "homepage": "https://github.com/nearform/crashbox#readme",
+  "bugs": {
+    "url": "https://github.com/nearform/crashbox/issues"
+  },
+  "keywords": [
+    "webgpu",
+    "webassembly",
+    "crash reporting"
+  ],
+  "type": "module",
+  "main": "src/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "prebuild": "rm -rf dist",
+    "build": "tsc --project tsconfig.json",
+    "check": "npm run lint && npm run check:types && npm run check:format && npm run test",
+    "check:format": "prettier --check .",
+    "check:lint": "eslint .",
+    "check:types": "tsc --project tsconfig.check.json",
+    "format": "prettier --write . && eslint --cache --fix .",
+    "lint": "eslint .",
+    "test": "node --test 'test/*.test.js'",
+    "test:only": "node --test --test-only 'test/*.test.js'",
+    "dep:check": "npx npm-check-updates"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.9.1",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
