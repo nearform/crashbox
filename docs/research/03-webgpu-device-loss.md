@@ -2,7 +2,9 @@
 
 > SPEC §8 #3 and #4. Status: **iOS done (both)** — full taxonomy on iPhone 15 Pro: graceful destroy,
 > oversized buffer, lazy alloc, and a **real VRAM-commit OOM that hard-killed the tab with no
-> `device.lost`** (#4 answered). WebGPU is the **primary v1 detector target**.
+> `device.lost`** (#4 answered). WebGPU is the **primary v1 detector target**. The implemented
+> detector (`src/detectors.js`) was device-validated 2026-05-29 — see
+> [Follow-up](#follow-up-2026-05-29--crashbox-webgpu-detector-on-device-phase-5).
 
 ## Question
 
@@ -108,6 +110,39 @@ device-acquired → commit-flood-start → uncapturederror:GPUOutOfMemoryError
 - (The ~162 GB nominal figure reflects `writeBuffer` copies queued faster than they commit on
   unified memory; the point is the tab died and no loss event fired.)
 
+### Follow-up 2026-05-29 — crashbox webgpu detector on-device (Phase 5)
+
+Validated the implemented detector (`src/detectors.js`) end-to-end against the demo on the same
+device:
+
+- **Graceful `device.destroy()`** → breadcrumbed as intentional (`reason:"destroyed"`, no loss
+  marker); tab survives. ✅
+- **Oversized buffer (2× `maxBufferSize`)** → proactive size warning + `onDeviceLossImminent` + a
+  `GPUValidationError` via `uncapturederror`; none mis-tagged as a crash. ✅
+- **Committed `writeBuffer` flood** → tab hard-killed; recovered next load as
+  **`reason:"webgpu-device-lost"`**. ✅
+
+Two refinements to the findings above:
+
+- **Unified ~1.5–2 GB tab ceiling.** The committed flood died right after a ~1536 MB milestone — the
+  _same_ window as the in-tab WASM OOM (research §2 follow-up). GPU-committed and WASM-linear memory
+  share one per-tab budget; the "GPU OOM and WASM OOM converge" point is now numeric.
+- **No live early-warning in the committed path.** Trigger → ~1536 MB spanned only ~200 ms; the tab
+  died sub-second and **no `GPUOutOfMemoryError`/`uncapturederror` and no `onDeviceLossImminent`
+  fired** before death (vs. the ~4 GB warning in the _lazy_ `createBuffer` flood at step 3/4). So
+  `onDeviceLossImminent` is **not guaranteed** for a real committed GPU OOM — **Layer-3 inference is
+  the load-bearing path**, and the next-load reason resolves to `webgpu-device-lost` only if a webgpu
+  marker is in the breadcrumb trail.
+  - **Gap exposed → FIXED (Phase 5.1).** In the original run the marker came from the _demo's_ own
+    `gpu committed ~N MB` milestones; the detector only breadcrumbed loss / error / oversized events,
+    not routine GPU activity, so a real app hit by a sub-second committed OOM with no `uncapturederror`
+    would have recovered as `hard-kill`. The webgpu detector now keeps a **throttled rolling
+    GPU-activity log**: it wraps `queue.writeBuffer`/`queue.submit` and breadcrumbs
+    `webgpu activity: ~N MB committed` (tagged `webgpu-device-lost`) only under real memory pressure —
+    a single ≥256 MB burst flushes immediately, otherwise ≥64 MB committed per 2 s window — so routine
+    light GPU use stays out of the trail and can't hijack an unrelated crash's reason. The demo's
+    commit-flood no longer breadcrumbs by hand; the marker now comes from the detector itself.
+
 ## Synthesized findings (iOS 18.7 / Safari 26.3) → detector design
 
 | Trigger                            | `device.lost`        | tab      | how it surfaces                                         |
@@ -125,7 +160,9 @@ device-acquired → commit-flood-start → uncapturederror:GPUOutOfMemoryError
 - Early-warning (`onDeviceLossImminent`): fire on **`uncapturederror` of type `GPUOutOfMemoryError`**
   (it precedes the kill by seconds — the real actionable signal) and/or **proactively compare
   requested buffer sizes to `maxBufferSize`**. Do **not** rely on `createBuffer` throwing or on a
-  device-loss event.
+  device-loss event. **Caveat (Phase 5 device test):** in the _committed_ `writeBuffer` path the kill
+  was sub-second and `GPUOutOfMemoryError` never fired — the early-warning window is not guaranteed;
+  see the [Follow-up](#follow-up-2026-05-29--crashbox-webgpu-detector-on-device-phase-5).
 - `adapter.info` is `{}` on iOS → no GPU fingerprint; don't branch on it.
 - **GPU OOM and WASM OOM converge:** both take the tab with no live event → the same Layer-3
   "snapshot + no clean-shutdown marker" inference handles both; the reason is disambiguated from the

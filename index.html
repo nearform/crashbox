@@ -318,37 +318,66 @@ $ npx serve
           const sink = [];
           for (;;) sink.push(new ArrayBuffer(64 * 1048576));
         };
+        // The webgpu detector now wraps the device on attachGPUDevice — it breadcrumbs
+        // device.lost / uncapturederror and the oversized-buffer warning automatically, so
+        // these handlers just perform the GPU action and let the SDK record it.
         const webgpuDeviceLoss = async () => {
           if (!CAPABILITIES.webgpu) return note("WebGPU unavailable");
-          note("trigger: WebGPU graceful device loss");
+          note("trigger: WebGPU graceful device loss (device.destroy)");
           try {
             const adapter = await navigator.gpu.requestAdapter();
             const device = await adapter.requestDevice();
             crashbox.attachGPUDevice(device);
-            device.lost.then((info) =>
-              note(`device.lost: ${info.reason}`, { reason: info.reason }),
-            );
-            device.destroy();
+            device.destroy(); // detector breadcrumbs device.lost:destroyed (intentional)
           } catch (e) {
             note(`WebGPU error: ${e.message}`);
           }
         };
         const webgpuOversizedBuffer = async () => {
           if (!CAPABILITIES.webgpu) return note("WebGPU unavailable");
-          note("trigger: WebGPU oversized buffer (GPUOutOfMemoryError)");
+          note("trigger: WebGPU oversized buffer");
           try {
             const adapter = await navigator.gpu.requestAdapter();
             const device = await adapter.requestDevice();
             crashbox.attachGPUDevice(device);
-            device.pushErrorScope("out-of-memory");
+            // Over maxBufferSize: detector flags it proactively, then the GPUValidationError
+            // surfaces via uncapturederror — both recorded by the SDK, no manual note needed.
             device.createBuffer({
-              size: 0xffffffff,
+              size: device.limits.maxBufferSize * 2,
               usage: GPUBufferUsage.STORAGE,
             });
-            const err = await device.popErrorScope();
-            note(`GPUOutOfMemoryError: ${err ? err.message : "none"}`, {
-              signal: "webgpu-device-lost",
-            });
+          } catch (e) {
+            note(`WebGPU error: ${e.message}`);
+          }
+        };
+        const webgpuCommitFlood = async () => {
+          if (!CAPABILITIES.webgpu) return note("WebGPU unavailable");
+          note("trigger: WebGPU commit flood (real VRAM OOM — may hard-kill)");
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            const device = await adapter.requestDevice();
+            crashbox.attachGPUDevice(device);
+            // createBuffer is lazy (research §3); only queue.writeBuffer forces a PHYSICAL VRAM
+            // commit, which actually OOM-kills the tab — with NO device.lost. The webgpu detector
+            // logs throttled GPU activity (committed bytes), so the trail carries a
+            // webgpu-device-lost marker even though the kill fires no error — no manual crumbs here.
+            const CHUNK = 128 * 1048576; // 128 MB per buffer
+            const src = new Uint8Array(CHUNK); // one reused CPU source
+            const step = () => {
+              try {
+                const buf = device.createBuffer({
+                  size: CHUNK,
+                  usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
+                });
+                device.queue.writeBuffer(buf, 0, src);
+                setTimeout(step, 0);
+              } catch (e) {
+                note(
+                  `GPU commit flood threw (caught, tab survived): ${e.message}`,
+                );
+              }
+            };
+            step();
           } catch (e) {
             note(`WebGPU error: ${e.message}`);
           }
@@ -431,20 +460,28 @@ ${recovered.breadcrumbs
 
             <div className="demo-section">
               <h2>WebGPU triggers</h2>
-              <p style=${{ color: "#8e44ad" }}>
-                Auto-detection (wrapping <code>device.lost</code> /
-                <code>uncapturederror</code>) lands in Phase 5; these buttons
-                breadcrumb manually for now.
+              <p>
+                The <code>webgpu</code> detector wraps the device on
+                <code>attachGPUDevice</code> and breadcrumbs
+                <code>device.lost</code> / <code>uncapturederror</code> /
+                oversized buffers automatically. Both below are catchable (tab
+                survives); a real GPU OOM hard-kills the tab with no event and
+                is caught by inference on the next load.
               </p>
               <${Trigger}
                 label="Graceful device loss (device.destroy)"
-                kind="manual"
+                kind="catchable"
                 onClick=${webgpuDeviceLoss}
               />
               <${Trigger}
-                label="Oversized buffer (GPUOutOfMemoryError)"
-                kind="manual"
+                label="Oversized buffer (> maxBufferSize)"
+                kind="catchable"
                 onClick=${webgpuOversizedBuffer}
+              />
+              <${Trigger}
+                label="GPU commit flood (writeBuffer until OOM)"
+                kind="kill"
+                onClick=${webgpuCommitFlood}
               />
             </div>
 

@@ -424,9 +424,9 @@ export const init = (options = {}) => {
   startHeartbeat();
   attachLifecycle();
 
-  // 4. Detectors enrich the trail (js default-on; webgpu/wasm opt-in, Phase 5/6). They emit
-  //    breadcrumbs via the public recorder, so a caught error/stall shows up in the next
-  //    load's crash record and feeds classifyReason.
+  // 4. Detectors enrich the trail (js default-on; webgpu/wasm opt-in — wasm lands Phase 6).
+  //    They emit breadcrumbs via the public recorder, so a caught error/stall shows up in the
+  //    next load's crash record and feeds classifyReason.
   try {
     detectorHandles = enableDetectors({ breadcrumb, options: active });
   } catch {
@@ -485,13 +485,17 @@ export const setSnapshot = (state) => {
 };
 
 /**
- * Register a WebGPU device so the detector can wrap it. No-op unless the `webgpu`
- * detector is enabled (Phase 5).
+ * Register a WebGPU device so the detector can wrap it (`device.lost` / `uncapturederror` /
+ * oversized-buffer early warning). No-op unless the `webgpu` detector is enabled.
  * @param {GPUDevice} device
  * @returns {void}
  */
 export const attachGPUDevice = (device) => {
-  void device; // Phase 5: webgpuDetector.attach(device)
+  for (const d of detectorHandles) {
+    if (d.attachGPUDevice) {
+      d.attachGPUDevice(device);
+    }
+  }
 };
 
 /**
