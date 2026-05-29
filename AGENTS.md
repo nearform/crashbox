@@ -24,6 +24,24 @@ npm run format       # prettier + eslint --fix
 
 `check:types` and `build` use **two different tsconfigs**: `tsconfig.json` builds declarations from `src/` only; `tsconfig.check.json` extends it, sets `noEmit`, and adds `test/` to `include`.
 
+## Dependencies — agents must NOT install (supply-chain policy)
+
+**Never run `npm install`/`npm add`/`yarn add`/`pnpm add` or edit `dependencies`/`devDependencies`
+in `package.json` yourself.** Supply-chain attacks via npm are common, so a human reviews and
+installs every dependency.
+
+When you need a package:
+
+1. **Propose it** — a list with, per package: exact npm name, `dependency` vs `devDependency`, what
+   it's for, where it's imported from, and a supply-chain note (types-only vs executable, popularity,
+   install scripts). Then stop and let the human install it.
+2. **Core has ZERO runtime dependencies** — a hard constraint. Anything you propose is a `devDep`
+   unless the human explicitly decides otherwise.
+3. **Prefer zero-dep** — hand-roll small helpers (e.g. browser-globals lists, trivial test fakes)
+   rather than pulling a package, and say so when a dep is avoidable.
+4. Test-only fakes (e.g. `fake-indexeddb`, `happy-dom`) are `devDependencies` imported **only from
+   `test/`**, never from `src/` (which must stay runtime-dep-free and browser-loadable).
+
 ## Pitfalls
 
 ### Use the project's Node version
