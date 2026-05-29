@@ -43,6 +43,9 @@
  * @property {number} [breadcrumbLimit]    Ring-buffer capacity. Default 100.
  * @property {number} [snapshotMaxBytes]   JSON byte cap for snapshots. Default 32768.
  * @property {DetectorName[]} [detectors]  Enabled detectors. Default ["js"].
+ * @property {boolean} [debug]             Attach a `window.__crashbox` debug handle. Off by
+ *                                         default — opt-in so the SDK never pollutes a host's
+ *                                         namespace unless asked.
  * @property {(record: CrashRecord) => void} [onCrashRecovered]
  * @property {() => void} [onMemoryPressure]
  * @property {(info: { reason?: string }) => void} [onDeviceLossImminent]

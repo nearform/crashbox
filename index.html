@@ -110,6 +110,16 @@ $ npx serve
         font-size: 1.5em;
         letter-spacing: -0.01em;
       }
+      /* Keep long breadcrumb/stack output inside the card on mobile instead of overflowing. */
+      .demo-section pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background: #f4f4f5;
+        padding: 12px;
+        border-radius: 6px;
+        font-size: 0.8em;
+        max-width: 100%;
+      }
     </style>
     <title>crashbox Demo</title>
   </head>
@@ -141,6 +151,7 @@ $ npx serve
       let recoveredRecord = null;
       crashbox.init({
         detectors: ["webgpu", "wasm", "js"],
+        debug: true, // attaches window.__crashbox (.dump/.clear/.recovered) for laptop Safari
         onCrashRecovered(record) {
           recoveredRecord = record;
         },
@@ -151,6 +162,8 @@ $ npx serve
           crashbox.breadcrumb("onDeviceLossImminent", info);
         },
       });
+
+      // window.__crashbox is attached by the SDK itself (init's debug:true above).
 
       // One-shot capability probe (sync booleans are valid even over plain HTTP — research §6).
       const supports = (fn, fallback = false) => {
@@ -193,20 +206,30 @@ $ npx serve
             borderRadius: "4px",
             padding: "2px 8px",
             fontSize: "0.7em",
-            marginLeft: "8px",
             whiteSpace: "nowrap",
           }}
           >${label}</span
         >`;
       };
 
+      // Full-width on mobile (caps on desktop), label + badge wrap instead of running off-screen.
       const Trigger = ({ label, kind, onClick }) => html`
         <button
           className="pure-button"
-          style=${{ margin: "4px", textAlign: "left" }}
+          style=${{
+            margin: "4px 0",
+            width: "100%",
+            maxWidth: "480px",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: "8px",
+            textAlign: "left",
+            whiteSpace: "normal",
+          }}
           onClick=${onClick}
         >
-          ${label}<${Badge} kind=${kind} />
+          <span>${label}</span><${Badge} kind=${kind} />
         </button>
       `;
 

@@ -53,6 +53,9 @@ const recordKey = (id) => `${KEY_PREFIX}:record:${id}`;
 let active = null;
 /** @type {Recorder | null} */
 let recorder = null;
+/** The crash record (if any) delivered on this load — exposed via the debug handle. */
+/** @type {CrashRecord | null} */
+let lastRecovered = null;
 /** @type {ReturnType<typeof setInterval> | null} */
 let heartbeatId = null;
 /** @type {import("./detectors.js").Detector[]} */
@@ -300,6 +303,80 @@ const recoverPrevious = () => {
   return recovered;
 };
 
+// --- debug handle (opt-in via options.debug) --------------------------------
+
+/** Every `crashbox:*` key currently in localStorage. @returns {string[]} */
+const debugKeys = () => {
+  const storage = getStorage();
+  /** @type {string[]} */
+  const out = [];
+  if (storage) {
+    for (let i = 0; i < storage.length; i++) {
+      const k = storage.key(i);
+      if (k && k.startsWith(`${KEY_PREFIX}:`)) {
+        out.push(k);
+      }
+    }
+  }
+  return out;
+};
+
+/**
+ * Attach a `window.__crashbox` console handle: the public API plus storage introspection
+ * (`dump`/`clear`) and `recovered()`. Only called when `options.debug` is set, and only where a
+ * window exists — the SDK otherwise never touches the global namespace.
+ */
+const attachDebugHandle = () => {
+  const win = getWindow();
+  if (!win) {
+    return;
+  }
+  /** @type {any} */ (win).__crashbox = {
+    init,
+    breadcrumb,
+    setSnapshot,
+    attachGPUDevice,
+    getActiveOptions,
+    getStatus,
+    /** The crash record recovered on this load, or null. */
+    recovered: () => lastRecovered,
+    /** Parsed contents of every `crashbox:*` localStorage key. */
+    dump: () => {
+      const storage = getStorage();
+      /** @type {Record<string, unknown>} */
+      const out = {};
+      if (storage) {
+        for (const k of debugKeys()) {
+          const raw = storage.getItem(k);
+          try {
+            out[k] = raw === null ? null : JSON.parse(raw);
+          } catch {
+            out[k] = raw;
+          }
+        }
+      }
+      return out;
+    },
+    /** Wipe crashbox's localStorage keys (reset between tests). Returns the keys removed. */
+    clear: () => {
+      const storage = getStorage();
+      const keys = debugKeys();
+      if (storage) {
+        keys.forEach((k) => storage.removeItem(k));
+      }
+      return keys;
+    },
+  };
+  // A single line so a dev knows the handle is live (debug-mode only — opt-in).
+  try {
+    console.info(
+      "crashbox: debug handle at window.__crashbox (.dump/.status via getStatus/.recovered/.clear)",
+    );
+  } catch {
+    // no console — fine
+  }
+};
+
 // --- public API -------------------------------------------------------------
 
 /**
@@ -316,6 +393,7 @@ export const init = (options = {}) => {
 
   // 1. Recover the previous session before we overwrite the "current" pointer.
   const recovered = recoverPrevious();
+  lastRecovered = recovered;
   if (recovered && active.onCrashRecovered) {
     try {
       active.onCrashRecovered(recovered);
@@ -353,6 +431,11 @@ export const init = (options = {}) => {
     detectorHandles = enableDetectors({ breadcrumb, options: active });
   } catch {
     detectorHandles = []; // a detector failing to attach must not break init
+  }
+
+  // 5. Opt-in debug handle (never touches window unless asked).
+  if (active.debug) {
+    attachDebugHandle();
   }
 };
 

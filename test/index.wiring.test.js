@@ -162,3 +162,27 @@ test("breadcrumb / setSnapshot before init are safe no-ops", () => {
   assert.doesNotThrow(() => crashbox.breadcrumb("x"));
   assert.doesNotThrow(() => crashbox.setSnapshot({ a: 1 }));
 });
+
+// --- debug handle (opt-in) ------------------------------------------------
+
+test("debug is off by default → window.__crashbox is not attached", () => {
+  const win = /** @type {any} */ (window);
+  delete win.__crashbox;
+  crashbox.init();
+  assert.equal(win.__crashbox, undefined);
+});
+
+test("init({ debug: true }) attaches window.__crashbox with introspection helpers", () => {
+  crashbox.init({ debug: true });
+  const handle = /** @type {any} */ (window).__crashbox;
+  assert.ok(handle, "expected a debug handle");
+  for (const fn of ["dump", "clear", "recovered", "getStatus", "breadcrumb"]) {
+    assert.equal(typeof handle[fn], "function", `${fn} should be callable`);
+  }
+  // Handle reflects live SDK state and can read/wipe the persisted black box.
+  assert.equal(handle.getStatus().sessionId, crashbox.getStatus()?.sessionId);
+  assert.ok(Object.keys(handle.dump()).some((k) => k.startsWith("crashbox:")));
+  const removed = /** @type {string[]} */ (handle.clear());
+  assert.ok(removed.every((k) => k.startsWith("crashbox:")));
+  assert.deepEqual(handle.dump(), {});
+});
