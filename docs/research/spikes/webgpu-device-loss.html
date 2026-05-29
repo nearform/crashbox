@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crashbox spike — WebGPU device-loss taxonomy (iOS)</title>
+    <style>
+      body {
+        font:
+          14px/1.5 -apple-system,
+          system-ui,
+          sans-serif;
+        margin: 1rem;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      button {
+        font-size: 1rem;
+        padding: 0.6rem 0.9rem;
+        margin: 0.2rem 0.3rem 0.2rem 0;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 0.7rem;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+      }
+      .lost {
+        background: #fff5f5;
+        border: 1px solid #e3b;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>crashbox spike — WebGPU device-loss taxonomy (§8 #3/#4)</h1>
+    <p>
+      iOS Safari 26+. Tap the buttons in order and copy the
+      <b>"SUMMARY"</b> box after each. Goal: which losses leave the tab alive
+      (catchable, <code>device.lost</code> fires) vs. take the tab down
+      (inference-only). See
+      <a href="../03-webgpu-device-loss.md">findings doc</a>.
+    </p>
+
+    <pre id="summary" class="">probing…</pre>
+    <p>
+      <button id="destroy">1 · device.destroy() (graceful)</button>
+      <button id="oversized">2 · oversized buffer</button>
+      <button id="flood">3 · buffer-alloc flood (lazy, won't kill)</button>
+      <button id="commit">
+        4 · committed flood — real VRAM (may kill tab)
+      </button>
+    </p>
+    <pre id="log"></pre>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const log = (m) => {
+        $("log").textContent += m + "\n";
+      };
+      const LAST = "cbgpu_last"; // persist last event so a tab-kill is visible after reload
+
+      const summary = {
+        ua: navigator.userAgent,
+        gpuPresent: !!navigator.gpu,
+        // recovered from a previous load (set if the tab died last time):
+        previousLoad: JSON.parse(localStorage.getItem(LAST) || "null"),
+        adapter: null,
+        limits: null,
+        deviceLost: null, // {reason, message} once device.lost resolves
+        events: [], // ordered log of what happened
+      };
+      const note = (e) => {
+        summary.events.push(e);
+        localStorage.setItem(
+          LAST,
+          JSON.stringify({ at: Date.now(), events: summary.events }),
+        );
+        render();
+      };
+      const render = () =>
+        ($("summary").textContent = JSON.stringify(summary, null, 2));
+      render();
+      window.__gpu = summary; // expose for the console: JSON.stringify(window.__gpu)
+
+      if (!navigator.gpu) {
+        log("navigator.gpu is undefined — WebGPU not available here.");
+        note("no-webgpu");
+      }
+
+      let device;
+      const init = async () => {
+        try {
+          const adapter = await navigator.gpu.requestAdapter();
+          if (!adapter) {
+            note("no-adapter");
+            log("requestAdapter() returned null");
+            return;
+          }
+          summary.adapter = {
+            // adapter.info may be gated; capture what's available
+            info: adapter.info ? { ...adapter.info } : "unavailable",
+            features: [...adapter.features].slice(0, 40),
+          };
+          summary.limits = {
+            maxBufferSize: adapter.limits.maxBufferSize,
+            maxStorageBufferBindingSize:
+              adapter.limits.maxStorageBufferBindingSize,
+            maxComputeWorkgroupsPerDimension:
+              adapter.limits.maxComputeWorkgroupsPerDimension,
+          };
+          device = await adapter.requestDevice();
+          note("device-acquired");
+          log("got device. maxBufferSize=" + adapter.limits.maxBufferSize);
+
+          device.lost.then((info) => {
+            summary.deviceLost = { reason: info.reason, message: info.message };
+            note("device.lost:" + info.reason);
+            log("device.lost — reason=" + info.reason + " msg=" + info.message);
+          });
+          device.addEventListener?.("uncapturederror", (ev) => {
+            note("uncapturederror:" + (ev.error?.constructor?.name || "?"));
+            log("uncapturederror: " + ev.error?.message);
+          });
+        } catch (e) {
+          note("init-threw:" + e.name);
+          log("init threw: " + e);
+        }
+      };
+      await init();
+
+      $("destroy").onclick = () => {
+        if (!device) return log("no device");
+        note("calling-destroy");
+        device.destroy(); // expect device.lost reason "destroyed"; tab should survive
+        log("called device.destroy()");
+      };
+
+      $("oversized").onclick = async () => {
+        if (!device) return log("no device");
+        const max = summary.limits?.maxBufferSize ?? 268435456;
+        for (const mult of [1.5, 4, 64]) {
+          const size = Math.floor(max * mult);
+          try {
+            device.pushErrorScope?.("out-of-memory");
+            const buf = device.createBuffer({
+              size,
+              usage: GPUBufferUsage.STORAGE,
+            });
+            const err = device.popErrorScope
+              ? await device.popErrorScope()
+              : null;
+            note("buffer x" + mult + (err ? ":scoped-error" : ":created"));
+            log(
+              "buffer " +
+                size +
+                " bytes → " +
+                (err ? "error: " + err.message : "created"),
+            );
+            buf.destroy?.();
+          } catch (e) {
+            note("buffer x" + mult + ":threw:" + e.name);
+            log("buffer " + size + " threw: " + e);
+          }
+        }
+      };
+
+      // Committed flood: actually UPLOAD into each buffer so GPU/unified memory is
+      // really backed (createBuffer alone is lazy). One reused CPU source keeps CPU
+      // bounded while committed GPU memory grows — the real OOM-kill path.
+      $("commit").onclick = async () => {
+        if (!device) return log("no device");
+        note("commit-flood-start");
+        log(
+          "uploading into buffers to commit real VRAM — watch for device.lost or tab death…",
+        );
+        const chunkMB = 128;
+        const chunk = chunkMB * 1024 * 1024;
+        const src = new Uint8Array(chunk); // ONE reused CPU buffer (CPU stays ~128MB)
+        src.fill(1);
+        const bufs = [];
+        window.__committed = bufs;
+        let committedMB = 0;
+        const step = () => {
+          try {
+            const b = device.createBuffer({
+              size: chunk,
+              usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            });
+            device.queue.writeBuffer(b, 0, src); // forces the full buffer to be backed
+            bufs.push(b);
+            committedMB += chunkMB;
+            summary.committedMB = committedMB;
+            if (committedMB % 512 === 0) note("commit:" + committedMB + "MB");
+            setTimeout(step, 0);
+          } catch (e) {
+            note("commit-threw:" + e.name);
+            log("commit flood threw: " + e);
+          }
+        };
+        step();
+      };
+
+      $("flood").onclick = async () => {
+        if (!device) return log("no device");
+        note("flood-start");
+        log(
+          "allocating large buffers in a loop — watch for device.lost or tab death…",
+        );
+        const bufs = [];
+        window.__bufs = bufs;
+        const chunk = Math.min(
+          summary.limits?.maxBufferSize ?? 1 << 27,
+          1 << 28,
+        ); // up to 256MB
+        const step = () => {
+          try {
+            for (let i = 0; i < 8; i++) {
+              const b = device.createBuffer({
+                size: chunk,
+                usage: GPUBufferUsage.STORAGE,
+              });
+              bufs.push(b);
+            }
+            summary.floodMB = (bufs.length * chunk) / 1048576;
+            note("flood:" + summary.floodMB + "MB");
+            setTimeout(step, 0);
+          } catch (e) {
+            note("flood-threw:" + e.name);
+            log("flood threw: " + e);
+          }
+        };
+        step();
+      };
+    </script>
+    <hr />
+    <nav style="font-size: 13px; line-height: 2.2">
+      <b><a href="./">spikes</a>:</b>
+      <a href="01-localstorage-durability.html">01 durability</a> ·
+      <a href="02-ios-discard-vs-crash.html">02 discard</a> ·
+      <a href="03-real-oom-crash.html">03 real-oom</a> ·
+      <a href="07-snapshot-serialization.html">07 serialize</a> ·
+      <a href="webgpu-device-loss.html">webgpu</a> ·
+      <a href="capabilities-probe.html">capabilities</a>
+    </nav>
+  </body>
+</html>

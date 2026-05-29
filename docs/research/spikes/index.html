@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crashbox spikes</title>
+    <style>
+      body {
+        font:
+          15px/1.6 -apple-system,
+          system-ui,
+          sans-serif;
+        margin: 1.2rem;
+        max-width: 40rem;
+      }
+      h1 {
+        font-size: 1.2rem;
+      }
+      li {
+        margin: 0.6rem 0;
+      }
+      a {
+        font-size: 1.05rem;
+      }
+      .d {
+        color: #555;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>crashbox research spikes</h1>
+    <p class="d">
+      Throwaway repro pages. Run on the iPhone, copy the on-screen JSON box
+      back. WebGPU + capabilities need HTTPS (ngrok); the rest work over plain
+      http.
+    </p>
+    <ul>
+      <li>
+        <a href="01-localstorage-durability.html"
+          >01 · localStorage durability</a
+        >
+        <div class="d">sync-write survival under crash (§8 #1)</div>
+      </li>
+      <li>
+        <a href="02-ios-discard-vs-crash.html">02 · discard vs. crash</a>
+        <div class="d">lifecycle signal logger (§8 #2)</div>
+      </li>
+      <li>
+        <a href="03-real-oom-crash.html">03 · real OOM crash (WASM)</a>
+        <div class="d">in-tab WASM blowup; durability + crash signature</div>
+      </li>
+      <li>
+        <a href="07-snapshot-serialization.html">07 · snapshot serialization</a>
+        <div class="d">JSON vs structuredClone cost + capability (§8 #7)</div>
+      </li>
+      <li>
+        <a href="webgpu-device-loss.html">webgpu · device-loss taxonomy</a>
+        <div class="d">
+          device.lost / uncapturederror / GPU OOM (§8 #3/#4) · HTTPS
+        </div>
+      </li>
+      <li>
+        <a href="capabilities-probe.html">capabilities probe</a>
+        <div class="d">
+          memory indicators + storage budget (§8 #6/#9) · HTTPS
+        </div>
+      </li>
+    </ul>
+  </body>
+</html>

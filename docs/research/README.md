@@ -7,17 +7,17 @@ date, environment (browser + version + device), method, and the decision the res
 
 ## Status
 
-| #   | Item                                             | Risk                                              | Status                    | Findings                                                         |
-| --- | ------------------------------------------------ | ------------------------------------------------- | ------------------------- | ---------------------------------------------------------------- |
-| 1   | localStorage write durability under OOM kill     | **highest** — Layer 1 fallback rests on it        | desktop done, iOS pending | [01-localstorage-durability.md](./01-localstorage-durability.md) |
-| 2   | iOS tab-discard vs. crash disambiguation         | **high** — false-positive guard on primary target | todo                      | [02-ios-discard-vs-crash.md](./02-ios-discard-vs-crash.md)       |
-| 7   | Snapshot serialization cost / capability         | high — must not cause the OOM it detects          | desktop done, iOS pending | [07-snapshot-serialization.md](./07-snapshot-serialization.md)   |
-| 3   | WebGPU device-loss taxonomy                      | med — gates WebGPU detector (Phase 5)             | not started               | —                                                                |
-| 4   | GPU-process-kill-takes-tab time budget           | med                                               | not started               | —                                                                |
-| 5   | Reporting API `crash` local ingestion (Chromium) | low — corroboration only                          | not started               | —                                                                |
-| 6   | Memory-pressure leading indicators               | med — drives `onMemoryPressure`                   | not started               | —                                                                |
-| 8   | In-browser LLM OOM profile (flagship)            | high — real-world validation                      | not started               | —                                                                |
-| 9   | Black-box size budget under iOS eviction         | med — sets default limits                         | not started               | —                                                                |
+| #   | Item                                             | Risk                                              | Status                                    | Findings                                                         |
+| --- | ------------------------------------------------ | ------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
+| 1   | localStorage write durability under OOM kill     | **highest** — Layer 1 fallback rests on it        | **CONFIRMED (desktop + iOS)**             | [01-localstorage-durability.md](./01-localstorage-durability.md) |
+| 2   | iOS tab-discard vs. crash disambiguation         | **high** — false-positive guard on primary target | **discriminator synthesized**             | [02-ios-discard-vs-crash.md](./02-ios-discard-vs-crash.md)       |
+| 7   | Snapshot serialization cost / capability         | high — must not cause the OOM it detects          | desktop done, iOS pending                 | [07-snapshot-serialization.md](./07-snapshot-serialization.md)   |
+| 3   | WebGPU device-loss taxonomy                      | med — gates WebGPU detector (Phase 5)             | **iOS done**                              | [03-webgpu-device-loss.md](./03-webgpu-device-loss.md)           |
+| 4   | GPU-process-kill-takes-tab time budget           | med                                               | **iOS done** — tab dies, no `device.lost` | [03-webgpu-device-loss.md](./03-webgpu-device-loss.md)           |
+| 5   | Reporting API `crash` local ingestion (Chromium) | low — corroboration only                          | not started                               | —                                                                |
+| 6   | Memory-pressure leading indicators               | med — drives `onMemoryPressure`                   | **iOS done**                              | [06-memory-pressure.md](./06-memory-pressure.md)                 |
+| 8   | In-browser LLM OOM profile (flagship)            | high — real-world validation                      | not started                               | —                                                                |
+| 9   | Black-box size budget under iOS eviction         | med — sets default limits                         | not started                               | —                                                                |
 
 ## Current focus (pre-implementation spikes)
 

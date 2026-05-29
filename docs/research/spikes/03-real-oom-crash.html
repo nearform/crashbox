@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crashbox spike 03 — real OOM crash (WASM) in-tab</title>
+    <style>
+      body {
+        font:
+          15px/1.5 -apple-system,
+          system-ui,
+          sans-serif;
+        margin: 1rem;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      button {
+        font-size: 1.05rem;
+        padding: 0.7rem 1rem;
+        margin: 0.25rem 0.3rem 0.25rem 0;
+      }
+      .big {
+        font-size: 1.7rem;
+        font-variant-numeric: tabular-nums;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 0.7rem;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+      }
+      .rec {
+        background: #fff5f5;
+        border: 1px solid #e3b;
+        padding: 0.7rem;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>crashbox spike 03 — real OOM crash (WASM) in-tab</h1>
+    <p>
+      The black box (durable counter + boot signals) lives in the SAME tab that
+      blows up WebAssembly memory until iOS kills it. After the tab dies and
+      reloads, the "Recovered" box shows what survived and what the crash-reload
+      looks like. Tests durability under a genuine OOM kill (spike 01) and the
+      crash signature (spike 02).
+    </p>
+
+    <div class="rec">
+      <b>RECOVERED FROM PREVIOUS LOAD</b>
+      <pre id="recovered">reading…</pre>
+    </div>
+
+    <p class="big">
+      counter n = <span id="n">0</span> · wasm = <span id="mb">0</span> MB
+    </p>
+    <p>
+      <button id="wasm">Induce WASM OOM (kills the tab)</button>
+      <button id="clean">Clean reset</button>
+    </p>
+    <pre id="log"></pre>
+
+    <script type="module">
+      const LS_N = "cb03_n";
+      const HB = "cb03_hb";
+      const BOOT = "cb03_boot";
+      const LAST_PAGEHIDE = "cb03_lastpagehide"; // {persisted, t} of the final pagehide, if any
+      const IDB_DB = "cb03";
+      const IDB_STORE = "kv";
+      const $ = (id) => document.getElementById(id);
+      const log = (m) => ($("log").textContent += m + "\n");
+
+      const openIdb = () =>
+        new Promise((res, rej) => {
+          const r = indexedDB.open(IDB_DB, 1);
+          r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
+          r.onsuccess = () => res(r.result);
+          r.onerror = () => rej(r.error);
+        });
+      const idbGet = (db, k) =>
+        new Promise((res, rej) => {
+          const r = db
+            .transaction(IDB_STORE, "readonly")
+            .objectStore(IDB_STORE)
+            .get(k);
+          r.onsuccess = () => res(r.result);
+          r.onerror = () => rej(r.error);
+        });
+      const idbPut = (db, k, v) =>
+        db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).put(v, k);
+
+      let db;
+      try {
+        db = await openIdb();
+      } catch (e) {
+        log("IDB open failed: " + e);
+      }
+
+      // ---- Recover previous load ----
+      const nav = performance.getEntriesByType("navigation")[0] || {};
+      const prevN = localStorage.getItem(LS_N);
+      const prevHb = Number(localStorage.getItem(HB) || 0);
+      const prevBoot = Number(localStorage.getItem(BOOT) || 0);
+      let lastPagehide = null;
+      try {
+        lastPagehide = JSON.parse(
+          localStorage.getItem(LAST_PAGEHIDE) || "null",
+        );
+      } catch {
+        /* ignore */
+      }
+      let prevIdb;
+      try {
+        prevIdb = db ? await idbGet(db, "latest") : undefined;
+      } catch (e) {
+        prevIdb = "ERR " + e;
+      }
+
+      const recovered = {
+        // crash-signature (spike 02 question):
+        wasDiscarded: document.wasDiscarded === true,
+        navigationType: nav.type, // reload | navigate | back_forward
+        heartbeatAgeMs: prevHb ? Date.now() - prevHb : null, // gap since last heartbeat
+        lastPagehide, // null => NO pagehide before death (hard crash); {persisted:false} => clean exit
+        prevBootSeq: prevBoot,
+        // durability (spike 01 question):
+        localStorage_n: prevN === null ? null : Number(prevN),
+        indexedDB_n: prevIdb === undefined ? null : prevIdb,
+        localStorage_minus_idb:
+          prevN !== null && typeof prevIdb === "number"
+            ? Number(prevN) - prevIdb
+            : null,
+      };
+      $("recovered").textContent = JSON.stringify(recovered, null, 2);
+      window.__recovered = recovered;
+
+      // ---- New session ----
+      localStorage.setItem(BOOT, String(prevBoot + 1));
+      localStorage.removeItem(LAST_PAGEHIDE); // reset; set only if a pagehide fires this session
+      window.__n = 0;
+
+      const beat = () => localStorage.setItem(HB, String(Date.now()));
+      beat();
+      setInterval(beat, 1000);
+
+      // durable counter loop (sync LS + async IDB), the "heartbeat/black box" under test
+      setInterval(() => {
+        const n = ++window.__n;
+        localStorage.setItem(LS_N, String(n));
+        if (db) idbPut(db, "latest", n);
+        if (n % 100 === 0) $("n").textContent = String(n);
+      }, 4);
+
+      // capture the final pagehide so the next load can tell clean-exit from hard-crash
+      addEventListener("pagehide", (e) => {
+        localStorage.setItem(
+          LAST_PAGEHIDE,
+          JSON.stringify({ persisted: e.persisted, t: Date.now() }),
+        );
+      });
+
+      // ---- WASM linear-memory blowup: the vector that actually OOM-kills the tab ----
+      const induceWasmOom = () => {
+        log("growing WebAssembly.Memory until the tab dies…");
+        const mem = new WebAssembly.Memory({ initial: 1, maximum: 65536 }); // wasm32: up to 4 GB
+        let committedPages = 1;
+        const STEP = 256; // 256 * 64 KB = 16 MB per step
+        const grow = () => {
+          try {
+            const before = mem.buffer.byteLength;
+            mem.grow(STEP);
+            committedPages += STEP;
+            // touch the newly added region to force PHYSICAL commit (grow alone may be lazy)
+            const view = new Uint8Array(mem.buffer);
+            for (let i = before; i < view.length; i += 4096) view[i] = 1;
+            window.__wasmMB = (committedPages * 65536) / (1024 * 1024);
+            $("mb").textContent = window.__wasmMB.toFixed(0);
+            setTimeout(grow, 0);
+          } catch (e) {
+            log("wasm grow threw (caught — tab survived): " + e);
+          }
+        };
+        grow();
+      };
+
+      const cleanReset = () => {
+        localStorage.removeItem(LS_N);
+        localStorage.removeItem(HB);
+        localStorage.removeItem(LAST_PAGEHIDE);
+        if (db)
+          db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).clear();
+        log("cleared; reload for a clean baseline");
+      };
+
+      $("wasm").onclick = induceWasmOom;
+      $("clean").onclick = cleanReset;
+      if (new URLSearchParams(location.search).get("auto") === "wasm")
+        induceWasmOom();
+    </script>
+    <hr />
+    <nav style="font-size: 13px; line-height: 2.2">
+      <b><a href="./">spikes</a>:</b>
+      <a href="01-localstorage-durability.html">01 durability</a> ·
+      <a href="02-ios-discard-vs-crash.html">02 discard</a> ·
+      <a href="03-real-oom-crash.html">03 real-oom</a> ·
+      <a href="07-snapshot-serialization.html">07 serialize</a> ·
+      <a href="webgpu-device-loss.html">webgpu</a> ·
+      <a href="capabilities-probe.html">capabilities</a>
+    </nav>
+  </body>
+</html>

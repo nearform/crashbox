@@ -29,9 +29,7 @@ const lanIPs = () =>
 createServer(async (req, res) => {
   const rel = decodeURIComponent(req.url.split("?")[0]);
   try {
-    const body = await readFile(
-      join(HERE, rel === "/" ? "/index-list.html" : rel),
-    );
+    const body = await readFile(join(HERE, rel === "/" ? "/index.html" : rel));
     res.writeHead(200, {
       "content-type": MIME[extname(rel)] ?? "application/octet-stream",
       "cross-origin-opener-policy": "same-origin",
@@ -45,19 +43,13 @@ createServer(async (req, res) => {
 }).listen(PORT, "0.0.0.0", () => {
   const ips = lanIPs();
   console.log(`\ncrashbox spikes served on port ${PORT}`);
-  console.log(`Open one of these on the iPhone (same Wi-Fi):\n`);
-  for (const ip of ips) {
-    console.log(
-      `  http://${ip}:${PORT}/01-localstorage-durability.html   (spike 1: durability)`,
-    );
-    console.log(
-      `  http://${ip}:${PORT}/02-ios-discard-vs-crash.html       (spike 2: discard vs crash)`,
-    );
-    console.log(
-      `  http://${ip}:${PORT}/07-snapshot-serialization.html     (spike 7: serialization)`,
-    );
-    console.log("");
-  }
+  console.log(`Open the landing list on the iPhone (same Wi-Fi):\n`);
+  for (const ip of ips) console.log(`  http://${ip}:${PORT}/`);
   if (!ips.length) console.log("  (no LAN IPv4 found — check Wi-Fi)");
-  console.log("Ctrl-C to stop.\n");
+  console.log(
+    `\nNOTE: WebGPU + the capabilities probe (storage/memory) are secure-context-gated and need` +
+      `\nHTTPS — run \`ngrok http ${PORT}\` and open the https URL for those. The durability/discard/` +
+      `\nWASM/serialization-timing pages work fine over plain http.`,
+  );
+  console.log("\nCtrl-C to stop.\n");
 });

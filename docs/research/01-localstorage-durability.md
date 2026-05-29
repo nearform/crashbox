@@ -1,7 +1,8 @@
 # Research 01 — localStorage write durability under OOM kill
 
-> SPEC §8 #1. **Highest-risk assumption in the project.** Status: **in progress** — desktop Chrome
-> done (below); desktop Safari + iOS Safari + iOS PWA pending (manual, real hardware).
+> SPEC §8 #1. **Highest-risk assumption in the project.** Status: **CONFIRMED on iOS** — under a real
+> WASM OOM tab-kill on iPhone 15 Pro, the synchronous localStorage write survived with zero tail loss
+> (IndexedDB kept pace). Desktop Chrome done; desktop Safari + iOS PWA still nice-to-have.
 
 ## Question
 
@@ -35,7 +36,7 @@ Reproduce: `cd docs/research/spikes && node 01-driver.mjs --mode crash --runs 3`
 
 - [x] Desktop Chrome (CDP-driven, automated) — **Chrome 148.0.7778.216, macOS** ✅ done
 - [ ] Desktop Safari (manual, MacBook B) — version: \_\_\_
-- [ ] iOS Safari (manual, iPhone 15 Pro) — iOS: \_\_\_
+- [x] iOS Safari (manual, iPhone 15 Pro) — **iOS 18.7, Safari 26.3** — **JS-OOM vector does not hard-kill** (below)
 - [ ] iOS add-to-homescreen PWA (manual, iPhone 15 Pro) — iOS: \_\_\_
 
 ## Results
@@ -60,6 +61,47 @@ across an abrupt renderer kill, and async IDB was equally durable here.
 
 → On a high-RAM desktop, runaway allocation surfaces as a catchable `RangeError`, **not** a hard tab
 kill. The hard, unrecoverable OOM tab-kill is a memory-constrained / iOS phenomenon.
+
+### iOS Safari 26.3 / iOS 18.7 (iPhone 15 Pro), 2026-05-28 — JS-allocation OOM does NOT hard-kill
+
+Ran the "Start write loop + induce OOM" path on the device (remote-inspected from a MacBook). At
+**n ≈ 4200** the allocation loop logged **`alloc threw: RangeError: Out of memory`** (caught) and the
+**tab stayed alive** — same behavior as desktop Chrome, _not_ a tab kill.
+
+→ **A JS `ArrayBuffer` allocation loop is not a valid OOM-kill vector on iOS Safari** — it surfaces a
+catchable `RangeError`, the tab survives, and there is no process death to test durability against.
+The realistic hard-kill OOM vectors are **WASM linear-memory growth, WebGPU/GPU memory, and large
+media** (the flagship in-browser-LLM case), which are exercised later via the detectors/demo, plus
+the **iOS tab-discard**, which _is_ a genuine renderer termination (see
+[02-ios-discard-vs-crash.md](./02-ios-discard-vs-crash.md)). Kill-durability of the localStorage
+fallback on iOS is therefore validated through those paths, not this one.
+
+### iOS Safari 26.3 / iOS 18.7 (iPhone 15 Pro), 2026-05-29 — real WASM OOM kill: DURABILITY CONFIRMED
+
+The JS-allocation vector can't kill the tab (above), but **WebAssembly.Memory growth + touching the
+pages does** — this is the realistic OOM vector (the in-browser-LLM case). Spike page
+[`spikes/03-real-oom-crash.html`](./spikes/03-real-oom-crash.html) runs the durable counter (sync
+localStorage + async IDB) in the **same tab** that blows up WASM memory, then reports what survived.
+
+User confirmed the tab **crashed and auto-reloaded**. Recovered after the crash:
+
+```json
+{
+  "wasDiscarded": false,
+  "navigationType": "navigate",
+  "heartbeatAgeMs": 781,
+  "lastPagehide": null,
+  "localStorage_n": 2886,
+  "indexedDB_n": 2886,
+  "localStorage_minus_idb": 0
+}
+```
+
+→ **Under a genuine iOS Safari OOM tab-kill, the synchronous `localStorage` write survived with zero
+tail loss, and IndexedDB committed to the exact same point (`localStorage_n === indexedDB_n`, gap 0).**
+The load-bearing Layer-1 assumption holds on the primary target. `lastPagehide: null` confirms **no
+graceful event fires before the hard crash** — see [02](./02-ios-discard-vs-crash.md) for the full
+crash vs. discard signature analysis.
 
 ## Interpretation & caveats
 
