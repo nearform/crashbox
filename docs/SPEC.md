@@ -102,6 +102,10 @@ Three layers. Implement in this order.
 
 ### Layer 1 — The black box (durable write path)
 
+> **v1 update (see §0):** the primary store is **localStorage**, not IndexedDB. Research §8 #1 showed
+> sync localStorage survives a real iOS OOM with zero loss and the box is KB-sized, so IDB is deferred.
+> Read "IndexedDB" below as the deferred richer-store option; "localStorage fallback" is now the store.
+
 - **Primary store: IndexedDB.** Survives tab crash, async, large quota. Holds the breadcrumb ring
   buffer and the latest state snapshot, keyed by `sessionId`.
 - **Synchronous fallback: `localStorage`** for the single most-recent breadcrumb + heartbeat. A
