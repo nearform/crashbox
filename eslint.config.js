@@ -11,6 +11,9 @@ export default [
       "**/coverage/**",
       "**/node_modules/**",
       "./tmp-*",
+      // Throwaway research spike harnesses (Node CDP drivers + browser repro pages).
+      // Not shipped, not part of the package; exempt from the SDK lint rules.
+      "docs/research/spikes/**",
     ],
   },
   {

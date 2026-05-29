@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crashbox spike 02 — iOS discard vs crash</title>
+    <style>
+      body {
+        font:
+          15px/1.5 -apple-system,
+          system-ui,
+          sans-serif;
+        margin: 1rem;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      button {
+        font-size: 1.05rem;
+        padding: 0.7rem 1rem;
+        margin: 0.25rem 0.3rem 0.25rem 0;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 0.7rem;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+      }
+      .summary {
+        background: #eef6ff;
+        border: 1px solid #bcd;
+        padding: 0.7rem;
+        border-radius: 6px;
+      }
+      .crash {
+        color: #c0271a;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>crashbox spike 02 — iOS discard vs. crash</h1>
+    <p>
+      Open on the iPhone. Run the scenarios in
+      <a href="../02-ios-discard-vs-crash.md">the findings doc</a> (A–E) and,
+      for each, copy the <b>“THIS LOAD”</b> JSON back. The event log is durable,
+      so a discard/crash + silent reload still shows the prior signals.
+    </p>
+
+    <div class="summary">
+      <b>THIS LOAD</b>
+      <pre id="thisload">…</pre>
+    </div>
+
+    <p>
+      <button id="crash">Induce OOM crash (scenario C)</button>
+      <button id="clear">Clear log</button>
+    </p>
+
+    <h2>Event log (most recent first)</h2>
+    <pre id="log"></pre>
+
+    <script type="module">
+      const LOG_KEY = "cb02_log";
+      const HB_KEY = "cb02_hb";
+      const BOOT_KEY = "cb02_bootseq";
+      const $ = (id) => document.getElementById(id);
+
+      const readLog = () => {
+        try {
+          return JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
+        } catch {
+          return [];
+        }
+      };
+      const writeLog = (arr) =>
+        localStorage.setItem(LOG_KEY, JSON.stringify(arr.slice(-200)));
+      const push = (type, extra = {}) => {
+        const arr = readLog();
+        arr.push({
+          t: Date.now(),
+          iso: new Date().toISOString(),
+          type,
+          ...extra,
+        });
+        writeLog(arr);
+        render();
+      };
+
+      // ---- Heartbeat: lets the next load estimate gap since last-seen ----
+      const beat = () => localStorage.setItem(HB_KEY, String(Date.now()));
+      const prevHb = Number(localStorage.getItem(HB_KEY) || 0);
+      beat();
+      setInterval(beat, 1000);
+
+      // ---- Per-load boot record: the signals that distinguish discard vs crash ----
+      const nav = performance.getEntriesByType("navigation")[0] || {};
+      const bootSeq = Number(localStorage.getItem(BOOT_KEY) || 0) + 1;
+      localStorage.setItem(BOOT_KEY, String(bootSeq));
+
+      const thisLoad = {
+        bootSeq,
+        wasDiscarded: document.wasDiscarded === true, // iOS tab discard signal
+        navigationType: nav.type, // navigate | reload | back_forward
+        heartbeatAgeMs: prevHb ? Date.now() - prevHb : null, // gap since last-seen
+        // filled in by lifecycle listeners below as the page is shown:
+        pageshowPersisted: null, // true => restored from BFCache
+        ua: navigator.userAgent,
+        standalone: navigator.standalone === true, // add-to-homescreen PWA
+      };
+
+      const renderThisLoad = () =>
+        ($("thisload").textContent = JSON.stringify(thisLoad, null, 2));
+      renderThisLoad();
+      push("load", {
+        wasDiscarded: thisLoad.wasDiscarded,
+        navigationType: thisLoad.navigationType,
+        heartbeatAgeMs: thisLoad.heartbeatAgeMs,
+        standalone: thisLoad.standalone,
+      });
+
+      // ---- Lifecycle listeners: the candidate discriminators ----
+      addEventListener("pageshow", (e) => {
+        thisLoad.pageshowPersisted = e.persisted;
+        renderThisLoad();
+        push("pageshow", { persisted: e.persisted });
+      });
+      addEventListener("pagehide", (e) => {
+        // persisted=true => page entered BFCache (recoverable), not torn down.
+        push("pagehide", { persisted: e.persisted });
+      });
+      addEventListener("visibilitychange", () =>
+        push("visibilitychange", { state: document.visibilityState }),
+      );
+      addEventListener("freeze", () => push("freeze")); // Page Lifecycle API (may be absent on iOS)
+      addEventListener("resume", () => push("resume"));
+
+      // ---- Scenario C: genuine OOM crash (no graceful event expected) ----
+      $("crash").onclick = () => {
+        push("crash-button", { note: "about to exhaust memory" });
+        const sink = [];
+        window.__sink = sink;
+        const grow = () => {
+          try {
+            for (let i = 0; i < 50; i++)
+              sink.push(new Uint8Array(8 * 1024 * 1024));
+            setTimeout(grow, 0);
+          } catch (e) {
+            push("alloc-threw", { error: String(e) });
+          }
+        };
+        grow();
+      };
+      $("clear").onclick = () => {
+        localStorage.removeItem(LOG_KEY);
+        render();
+      };
+
+      function render() {
+        $("log").textContent = readLog()
+          .slice()
+          .reverse()
+          .map((e) => JSON.stringify(e))
+          .join("\n");
+      }
+      render();
+    </script>
+  </body>
+</html>

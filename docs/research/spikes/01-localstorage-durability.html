@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crashbox spike 01 — localStorage durability under crash</title>
+    <style>
+      body {
+        font:
+          15px/1.5 -apple-system,
+          system-ui,
+          sans-serif;
+        margin: 1.5rem;
+        max-width: 46rem;
+      }
+      h1 {
+        font-size: 1.2rem;
+      }
+      button {
+        font-size: 1rem;
+        padding: 0.5rem 0.9rem;
+        margin: 0.2rem 0.3rem 0.2rem 0;
+      }
+      .big {
+        font-size: 2rem;
+        font-variant-numeric: tabular-nums;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 0.8rem;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .ok {
+        color: #0a7d22;
+      }
+      .bad {
+        color: #c0271a;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>crashbox spike 01 — localStorage durability under crash</h1>
+    <p>
+      Writes a monotonic counter <code>n</code> to <b>localStorage</b> (sync)
+      and <b>IndexedDB</b> (async) on every tick, then crashes the tab. On the
+      next load we compare what each store retained against how far the counter
+      actually got — the gap is tail-write loss. See
+      <a href="../01-localstorage-durability.md">findings doc</a>.
+    </p>
+
+    <h2>Recovered from previous run</h2>
+    <pre id="recovered">reading…</pre>
+
+    <h2>Live</h2>
+    <p class="big">n = <span id="n">0</span></p>
+    <p>
+      <button id="start">Start write loop</button>
+      <button id="oom">Start write loop + induce OOM</button>
+      <button id="clean">Clean reset (clear stores)</button>
+    </p>
+    <p>
+      Driver hooks: <code>window.__n</code> (live counter),
+      <code>window.__started</code>, <code>window.__crashRun</code>.
+    </p>
+    <pre id="log"></pre>
+
+    <script type="module">
+      const LS_KEY = "cb01_ls"; // last n synchronously written to localStorage
+      const LS_RUN = "cb01_run"; // marks that a crash run was in progress
+      const IDB_DB = "cb01";
+      const IDB_STORE = "kv";
+
+      const $ = (id) => document.getElementById(id);
+      const logEl = $("log");
+      const log = (m) => {
+        logEl.textContent += m + "\n";
+      };
+
+      // ---- IndexedDB helpers (tiny, no deps) ----
+      const openIdb = () =>
+        new Promise((resolve, reject) => {
+          const req = indexedDB.open(IDB_DB, 1);
+          req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+
+      const idbGet = (db, key) =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction(IDB_STORE, "readonly");
+          const r = tx.objectStore(IDB_STORE).get(key);
+          r.onsuccess = () => resolve(r.result);
+          r.onerror = () => reject(r.error);
+        });
+
+      const idbPut = (db, key, val) => {
+        // fire-and-forget; we deliberately do NOT await — mirrors the SDK hot path
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).put(val, key);
+      };
+
+      let db;
+      try {
+        db = await openIdb();
+      } catch (e) {
+        log("IDB open failed: " + e);
+      }
+
+      // ---- Recover previous run ----
+      const prevLs = localStorage.getItem(LS_KEY);
+      const prevRun = localStorage.getItem(LS_RUN);
+      let prevIdb;
+      try {
+        prevIdb = db ? await idbGet(db, "latest") : undefined;
+      } catch (e) {
+        prevIdb = "ERR " + e;
+      }
+
+      const recovered = {
+        crashRunInProgress: prevRun === "1",
+        localStorage_n: prevLs === null ? null : Number(prevLs),
+        indexedDB_n: prevIdb === undefined ? null : prevIdb,
+        note: "Compare these against the driver-observed high-water n (out-of-process) to get tail loss.",
+      };
+      $("recovered").textContent = JSON.stringify(recovered, null, 2);
+      // Expose for the CDP driver to read after reload:
+      window.__recovered = recovered;
+
+      // ---- Write loop ----
+      window.__n = 0;
+      window.__started = false;
+      window.__crashRun = false;
+
+      let timer = null;
+      const tick = () => {
+        const n = ++window.__n;
+        // SYNC write — the assumption under test:
+        localStorage.setItem(LS_KEY, String(n));
+        // ASYNC mirror — fire-and-forget:
+        if (db) idbPut(db, "latest", n);
+        if (n % 200 === 0) $("n").textContent = String(n);
+      };
+
+      const startLoop = () => {
+        if (window.__started) return;
+        window.__started = true;
+        window.__crashRun = true;
+        localStorage.setItem(LS_RUN, "1");
+        log("write loop started");
+        // ~1 write/ms; enough churn to leave unsynced tail writes
+        timer = setInterval(tick, 1);
+      };
+
+      // Memory exhaustion to induce a real renderer OOM (slower, less deterministic
+      // than the driver's Page.crash, but closer to the real failure mode).
+      const induceOom = () => {
+        startLoop();
+        log("inducing OOM (allocating)…");
+        const sink = [];
+        window.__sink = sink;
+        const grow = () => {
+          try {
+            for (let i = 0; i < 50; i++)
+              sink.push(new Uint8Array(8 * 1024 * 1024)); // 8MB chunks
+            setTimeout(grow, 0);
+          } catch (e) {
+            log("alloc threw: " + e);
+          }
+        };
+        grow();
+      };
+
+      const cleanReset = async () => {
+        if (timer) clearInterval(timer);
+        localStorage.removeItem(LS_KEY);
+        localStorage.removeItem(LS_RUN);
+        if (db) {
+          const tx = db.transaction(IDB_STORE, "readwrite");
+          tx.objectStore(IDB_STORE).clear();
+        }
+        log("cleared stores; reload to confirm clean state");
+      };
+
+      $("start").onclick = startLoop;
+      $("oom").onclick = induceOom;
+      $("clean").onclick = cleanReset;
+
+      // Let the driver auto-start by setting ?auto=loop or ?auto=oom
+      const auto = new URLSearchParams(location.search).get("auto");
+      if (auto === "loop") startLoop();
+      if (auto === "oom") induceOom();
+    </script>
+  </body>
+</html>
