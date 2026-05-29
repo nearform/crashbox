@@ -1,6 +1,9 @@
 // The black box: an allocation-light breadcrumb ring buffer + JSON snapshot serialization.
 // Pure — no platform refs — so it's unit-testable directly under `node --test` (no DI).
 
+/** @typedef {import("./types.js").Breadcrumb} Breadcrumb */
+/** @typedef {import("./types.js").Snapshot} Snapshot */
+
 /**
  * Fixed-capacity breadcrumb ring buffer (research §2: allocation-light hot path — pre-sized
  * array, integer head, overwrite-in-place, no push/shift). Drops oldest when full.
@@ -8,48 +11,89 @@
 export class RingBuffer {
   /** @param {number} capacity */
   constructor(capacity) {
-    /** @type {(import("./types.js").Breadcrumb | undefined)[]} */
-    this.slots = new Array(capacity);
-    this.capacity = capacity;
+    /** @type {(Breadcrumb | undefined)[]} */
+    this.slots = new Array(Math.max(0, capacity));
+    this.capacity = Math.max(0, capacity);
+    /** Index of the next write — also the oldest entry once the buffer is full. */
     this.head = 0;
     this.size = 0;
   }
 
   /**
-   * @param {import("./types.js").Breadcrumb} _crumb
+   * Record a crumb, overwriting the oldest in place once full. No allocation beyond
+   * holding the reference; head advances modulo capacity.
+   * @param {Breadcrumb} crumb
    * @returns {void}
    */
-  push(_crumb) {
-    throw new Error("not implemented"); // Phase 1
+  push(crumb) {
+    if (this.capacity === 0) {
+      return;
+    } // degenerate: nothing can be stored
+    this.slots[this.head] = crumb;
+    this.head = (this.head + 1) % this.capacity;
+    if (this.size < this.capacity) {
+      this.size++;
+    }
   }
 
   /**
    * Oldest→newest snapshot of the buffer.
-   * @returns {import("./types.js").Breadcrumb[]}
+   * @returns {Breadcrumb[]}
    */
   toArray() {
-    throw new Error("not implemented"); // Phase 1
+    // Not yet wrapped: entries sit in [0, size) already in insertion order.
+    if (this.size < this.capacity) {
+      return /** @type {Breadcrumb[]} */ (this.slots.slice(0, this.size));
+    }
+    // Full: the oldest entry is at head; read forward, wrapping at the end.
+    return /** @type {Breadcrumb[]} */ ([
+      ...this.slots.slice(this.head),
+      ...this.slots.slice(0, this.head),
+    ]);
   }
 }
+
+/** Reused encoder so serialize stays allocation-light on the hot path. */
+const encoder = new TextEncoder();
 
 /**
  * Serialize + size-cap a snapshot. JSON (research §8 #7: ~5x faster than structuredClone,
  * sub-50µs at KB scale, and the only thing the localStorage fallback can carry). Returns the
  * JSON string, or null if un-serializable (cycles throw) or over `maxBytes` — caller
  * breadcrumbs the rejection rather than throwing into the app.
- * @param {import("./types.js").Snapshot} _state
- * @param {number} _maxBytes
+ * @param {Snapshot} state
+ * @param {number} maxBytes
  * @returns {string | null}
  */
-export const serializeSnapshot = (_state, _maxBytes) => {
-  throw new Error("not implemented"); // Phase 1
+export const serializeSnapshot = (state, maxBytes) => {
+  let json;
+  try {
+    json = JSON.stringify(state);
+  } catch {
+    return null; // cycles, BigInt, throwing toJSON, …
+  }
+  // JSON.stringify yields undefined for a non-serializable root (undefined/function/symbol).
+  if (typeof json !== "string") {
+    return null;
+  }
+  if (encoder.encode(json).length > maxBytes) {
+    return null;
+  } // UTF-8 byte cap, not char count
+  return json;
 };
 
 /**
  * Parse a persisted snapshot string (undefined if absent/invalid).
- * @param {string | null | undefined} _json
- * @returns {import("./types.js").Snapshot | undefined}
+ * @param {string | null | undefined} json
+ * @returns {Snapshot | undefined}
  */
-export const parseSnapshot = (_json) => {
-  throw new Error("not implemented"); // Phase 1
+export const parseSnapshot = (json) => {
+  if (json == null || json === "") {
+    return undefined;
+  }
+  try {
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
 };

@@ -21,6 +21,7 @@ export default [
       ecmaVersion: "latest",
       sourceType: "module",
       globals: {
+        TextEncoder: "readonly",
         TextDecoder: "readonly",
         process: "readonly",
       },
