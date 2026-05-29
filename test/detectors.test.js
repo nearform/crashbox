@@ -70,8 +70,10 @@ test("enableDetectors: js returns one detector with a stop()", () => {
   assert.equal(typeof live[0].stop, "function");
 });
 
-test("enableDetectors: unimplemented detector is skipped with a breadcrumb (no throw)", () => {
-  const { crumbs, ctx } = makeCtx(["wasm"]); // wasm is Phase 6 — still unregistered
+test("enableDetectors: an unknown detector name is skipped with a breadcrumb (no throw)", () => {
+  const { crumbs, ctx } = makeCtx(
+    /** @type {any} */ (["bogus"]), // not in the registry
+  );
   live = detectors.enableDetectors(ctx);
   assert.equal(live.length, 0);
   assert.ok(
@@ -80,13 +82,13 @@ test("enableDetectors: unimplemented detector is skipped with a breadcrumb (no t
   );
 });
 
-test("enableDetectors: mixed list enables js, notes the unimplemented one", () => {
-  const { crumbs, ctx } = makeCtx(["js", "wasm"]);
+test("enableDetectors: all three real detectors enable, none reported unavailable", () => {
+  const { crumbs, ctx } = makeCtx(["webgpu", "wasm", "js"]);
   live = detectors.enableDetectors(ctx);
-  assert.equal(live.length, 1);
+  assert.equal(live.length, 3);
   assert.equal(
     crumbs.filter((c) => c.data?.signal === "detector-unavailable").length,
-    1,
+    0,
   );
 });
 
@@ -353,5 +355,87 @@ test("webgpu: stop() restores queue.writeBuffer (no activity logging after)", ()
     crumbs.filter((c) => c.msg.startsWith("webgpu activity")).length,
     0,
     "no activity breadcrumb should fire after stop()",
+  );
+});
+
+// --- wasm detector --------------------------------------------------------
+// Uses real WebAssembly.Memory (available in Node); the detector patches the global
+// WebAssembly.Memory.prototype.grow, so stop() must restore it (beforeEach stops `live`).
+
+const PAGE = 65536; // WASM page = 64 KB
+/** @param {number} mb */
+const pages = (mb) => Math.ceil((mb * MB) / PAGE);
+
+const makeWasmCtx = () => {
+  /** @type {Array<{ msg: string, data?: Record<string, unknown> }>} */
+  const crumbs = [];
+  let pressure = 0;
+  const ctx = {
+    /** @param {string} msg @param {Record<string, unknown>} [data] */
+    breadcrumb: (msg, data) => crumbs.push({ msg, data }),
+    options: /** @type {import("../src/types.js").ResolvedOptions} */ ({
+      heartbeatMs: 2000,
+      breadcrumbLimit: 100,
+      snapshotMaxBytes: 32768,
+      detectors: ["wasm"],
+      onMemoryPressure: () => {
+        pressure += 1;
+      },
+    }),
+  };
+  return { crumbs, pressure: () => pressure, ctx };
+};
+
+test("enableDetectors: wasm returns a detector with a stop()", () => {
+  const { ctx } = makeCtx(["wasm"]);
+  live = detectors.enableDetectors(ctx);
+  assert.equal(live.length, 1);
+  assert.equal(typeof live[0].stop, "function");
+});
+
+test("wasm: a heavy memory grow breadcrumbs memory-near-cap + fires onMemoryPressure", () => {
+  const { crumbs, pressure, ctx } = makeWasmCtx();
+  live = detectors.enableDetectors(ctx);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(512) });
+  mem.grow(pages(300)); // ~300 MB ≥ burst threshold → immediate flush
+  const crumb = crumbs.find((c) => c.msg.startsWith("wasm memory:"));
+  assert.ok(crumb, "expected a wasm memory breadcrumb after a heavy grow");
+  assert.equal(crumb.data?.signal, "memory-near-cap");
+  assert.ok(pressure() >= 1, "onMemoryPressure should have fired");
+});
+
+test("wasm: a small grow below the floor is not breadcrumbed", () => {
+  const { crumbs, ctx } = makeWasmCtx();
+  live = detectors.enableDetectors(ctx);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(64) });
+  mem.grow(pages(8)); // ~8 MB, below floor
+  assert.equal(
+    crumbs.filter((c) => c.msg.startsWith("wasm memory:")).length,
+    0,
+  );
+});
+
+test("wasm: a failed grow is breadcrumbed and the RangeError still propagates", () => {
+  const { crumbs, ctx } = makeWasmCtx();
+  live = detectors.enableDetectors(ctx);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+  assert.throws(() => mem.grow(1000), RangeError); // can't exceed maximum
+  assert.ok(
+    crumbs.some((c) => c.msg.includes("grow failed")),
+    "expected a grow-failure breadcrumb",
+  );
+});
+
+test("wasm: stop() restores WebAssembly.Memory.prototype.grow", () => {
+  const { crumbs, ctx } = makeWasmCtx();
+  const det = detectors.enableDetectors(ctx)[0];
+  det.stop();
+  live = [];
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(512) });
+  mem.grow(pages(300));
+  assert.equal(
+    crumbs.filter((c) => c.msg.startsWith("wasm memory:")).length,
+    0,
+    "no wasm breadcrumb should fire after stop()",
   );
 });

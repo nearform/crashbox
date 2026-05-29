@@ -424,8 +424,8 @@ export const init = (options = {}) => {
   startHeartbeat();
   attachLifecycle();
 
-  // 4. Detectors enrich the trail (js default-on; webgpu/wasm opt-in — wasm lands Phase 6).
-  //    They emit breadcrumbs via the public recorder, so a caught error/stall shows up in the
+  // 4. Detectors enrich the trail (js default-on; webgpu/wasm opt-in). They emit breadcrumbs
+  //    via the public recorder, so a caught error/stall/OOM-pressure signal shows up in the
   //    next load's crash record and feeds classifyReason.
   try {
     detectorHandles = enableDetectors({ breadcrumb, options: active });

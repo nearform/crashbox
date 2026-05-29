@@ -1,7 +1,12 @@
 # Research 06 — Memory-pressure leading indicators (+ #9 storage budget)
 
 > SPEC §8 #6 and #9. Status: **iOS done** — no memory API exists on iOS Safari; `onMemoryPressure`
-> must rely on WASM-growth tracking. Storage quota is ample (~38 GB).
+> must rely on WASM-growth tracking. Storage quota is ample (~38 GB). **Implemented (Phase 6):** the
+> wasm detector (`src/detectors.js`) wraps `WebAssembly.Memory.prototype.grow`, tracks total committed
+> linear memory, and fires `onMemoryPressure` + `memory-near-cap` breadcrumbs under pressure (≥256 MB
+> burst flushes immediately, else ≥64 MB / 2 s window). Catches JS-initiated grows incl. emscripten's
+> `_emscripten_resize_heap`; pure module-internal `memory.grow` is not caught (future: poll exported
+> memories' `byteLength`).
 
 ## Question
 

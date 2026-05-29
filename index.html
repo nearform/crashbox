@@ -284,28 +284,18 @@ $ npx serve
         const wasmBlowup = () => {
           note("trigger: WASM linear-memory blowup");
           // Mirrors research spike 03: maximum + touching each grown page forces a PHYSICAL
-          // commit (raw grow() is lazy), which actually hard-kills the tab on iOS. The kill
-          // leaves no RangeError to catch, so we breadcrumb a memory-near-cap marker at
-          // milestones — that's what classifyReason keys off for "oom" (and previews Phase 6).
+          // commit (raw grow() is lazy), which actually hard-kills the tab on iOS. The wasm
+          // detector wraps Memory.prototype.grow and breadcrumbs memory-near-cap milestones
+          // itself, so the kill (which leaves no RangeError) still infers "oom" — no manual
+          // crumbs here.
           const mem = new WebAssembly.Memory({ initial: 1, maximum: 65536 });
           const STEP = 256; // 256 * 64 KB = 16 MB per step
-          let committedPages = 1;
-          let lastMarkedMB = 0;
           const grow = () => {
             try {
               const before = mem.buffer.byteLength;
               mem.grow(STEP);
-              committedPages += STEP;
               const view = new Uint8Array(mem.buffer);
               for (let i = before; i < view.length; i += 4096) view[i] = 1;
-              const mb = Math.round((committedPages * 65536) / 1048576);
-              if (mb - lastMarkedMB >= 512) {
-                lastMarkedMB = mb;
-                crashbox.breadcrumb(`wasm memory ~${mb} MB`, {
-                  signal: "memory-near-cap",
-                  mb,
-                });
-              }
               setTimeout(grow, 0);
             } catch (e) {
               note(`WASM grow threw (caught, tab survived): ${e.message}`);

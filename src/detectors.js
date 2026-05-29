@@ -37,6 +37,11 @@ const GPU_ACTIVITY_MS = 2000;
 const GPU_FLOOR_BYTES = 64 * 1048576;
 const GPU_BURST_BYTES = 256 * 1048576;
 
+/** WASM linear-memory growth thresholds — same shape as the GPU activity log. */
+const WASM_GROWTH_MS = 2000;
+const WASM_FLOOR_BYTES = 64 * 1048576;
+const WASM_BURST_BYTES = 256 * 1048576;
+
 /** @returns {Window | null} */
 const getWindow = () => {
   try {
@@ -359,18 +364,125 @@ const createWebgpuDetector = (ctx) => {
 };
 
 /**
- * Detector factories by name. `wasm` (Phase 6) is not registered yet; requesting it is a noted
- * no-op (a breadcrumb), never a throw.
+ * WASM detector (research §6: `WebAssembly.Memory` growth is the ONLY memory-pressure signal on
+ * iOS — no `performance.memory` / `measureUserAgentSpecificMemory`). Wraps
+ * `WebAssembly.Memory.prototype.grow` to track total committed linear memory across instances;
+ * under real pressure it fires `onMemoryPressure` and breadcrumbs `wasm memory: ~N MB committed`
+ * (signal `memory-near-cap` → `"oom"`), so a WASM OOM that hard-kills the tab with no event
+ * (research §2) recovers as `oom` from the trail. A failed grow (`RangeError`) is also
+ * breadcrumbed and re-thrown. Throttled like the GPU activity log: a ≥`WASM_BURST_BYTES` jump
+ * flushes immediately, else ≥`WASM_FLOOR_BYTES` per window. (JS-initiated grows — incl.
+ * emscripten's `_emscripten_resize_heap` — are caught; pure module-internal `memory.grow` is not.)
+ * @param {DetectorContext} ctx
+ * @returns {Detector}
+ */
+const createWasmDetector = (ctx) => {
+  let stopped = false;
+  if (typeof WebAssembly === "undefined" || !WebAssembly.Memory) {
+    return { stop() {} };
+  }
+  const proto = /** @type {any} */ (WebAssembly.Memory.prototype);
+  const originalGrow = proto.grow;
+  /** @type {WeakMap<object, number>} */
+  const sizes = new WeakMap();
+  let pendingBytes = 0;
+  let committedMB = 0;
+
+  const firePressure = () => {
+    const cb = ctx.options.onMemoryPressure;
+    if (cb) {
+      try {
+        cb();
+      } catch {
+        // a throwing app callback must not break the detector
+      }
+    }
+  };
+
+  const flush = () => {
+    if (pendingBytes < WASM_FLOOR_BYTES) {
+      pendingBytes = 0;
+      return;
+    }
+    committedMB += Math.round(pendingBytes / 1048576);
+    ctx.breadcrumb(`wasm memory: ~${committedMB} MB committed`, {
+      signal: "memory-near-cap",
+      committedMB,
+    });
+    firePressure();
+    pendingBytes = 0;
+  };
+
+  /** @this {any} @param {number} delta */
+  const trackedGrow = function (delta) {
+    let result;
+    let threw = null;
+    try {
+      result = originalGrow.call(this, delta);
+    } catch (e) {
+      threw = e;
+    }
+    try {
+      if (threw) {
+        const name = (threw && /** @type {any} */ (threw).name) || "error";
+        ctx.breadcrumb(`wasm memory.grow failed: ${name}`, {
+          signal: "memory-near-cap",
+        });
+        firePressure();
+      } else {
+        const bytes = this.buffer.byteLength;
+        const prev = sizes.get(this) || 0;
+        if (bytes > prev) {
+          pendingBytes += bytes - prev;
+          sizes.set(this, bytes);
+        }
+        if (pendingBytes >= WASM_BURST_BYTES) {
+          flush();
+        }
+      }
+    } catch {
+      // never break the host app's memory.grow
+    }
+    if (threw) {
+      throw threw;
+    }
+    return result;
+  };
+  proto.grow = trackedGrow;
+
+  const timer = setInterval(() => {
+    if (!stopped) {
+      flush();
+    }
+  }, WASM_GROWTH_MS);
+  unref(timer);
+
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+      if (proto.grow === trackedGrow) {
+        proto.grow = originalGrow;
+      }
+    },
+  };
+};
+
+/**
+ * Detector factories by name. All three are registered; an unknown name is a noted no-op (a
+ * breadcrumb), never a throw.
  * @type {Partial<Record<import("./types.js").DetectorName, (ctx: DetectorContext) => Detector>>}
  */
 const REGISTRY = {
   js: createJsDetector,
   webgpu: createWebgpuDetector,
+  wasm: createWasmDetector,
 };
 
 /**
  * Enable the detectors named in ctx.options.detectors. Returns handles for teardown +
- * GPU-device attachment. Unimplemented detectors are skipped with a breadcrumb.
+ * GPU-device attachment. An unknown detector name is skipped with a breadcrumb (defensive —
+ * js/webgpu/wasm are all registered).
  * @param {DetectorContext} ctx
  * @returns {Detector[]}
  */
@@ -380,7 +492,7 @@ export const enableDetectors = (ctx) => {
   for (const name of ctx.options.detectors) {
     const make = REGISTRY[name];
     if (!make) {
-      ctx.breadcrumb(`crashbox: detector "${name}" not yet implemented`, {
+      ctx.breadcrumb(`crashbox: unknown detector "${name}"`, {
         signal: "detector-unavailable",
       });
       continue;
