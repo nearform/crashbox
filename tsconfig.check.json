@@ -5,7 +5,7 @@
     "declaration": false,
     "emitDeclarationOnly": false,
     "rootDir": ".",
-    "types": ["node"]
+    "types": ["node", "@webgpu/types"]
   },
   "include": ["src/**/*.js", "test/**/*.js"]
 }

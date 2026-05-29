@@ -4,14 +4,15 @@
     "checkJs": true,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "outDir": "./dist",
     "rootDir": "./src",
     "skipLibCheck": true,
     "strict": true,
-    "target": "ESNext"
+    "target": "ESNext",
+    "types": ["@webgpu/types"]
   },
   "exclude": ["node_modules", "dist"],
   "include": ["src/**/*.js"]
