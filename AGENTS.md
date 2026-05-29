@@ -42,6 +42,13 @@ When you need a package:
 4. Test-only fakes (e.g. `fake-indexeddb`, `happy-dom`) are `devDependencies` imported **only from
    `test/`**, never from `src/` (which must stay runtime-dep-free and browser-loadable).
 
+## Version control — agents must NOT commit
+
+**Never run git write commands** (`commit`, `add`/stage, `branch`, `push`, `tag`, `merge`, `rebase`,
+`reset`) and **do not offer to commit.** The human owns all version control. Read-only git
+(`status`, `diff`, `log`) is fine. Finish your work, report what changed, and leave a clean working
+tree — the human handles commits. (Commits/pushes are also human-gated in `.claude/settings.json`.)
+
 ## Pitfalls
 
 ### Use the project's Node version
