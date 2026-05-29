@@ -34,6 +34,8 @@ part that's unit-tested.
 
 0 toolchain + scaffold (done) → 1 pure core (`blackbox` + `inference`, Node-tested) → 2 wire
 `index.js` (localStorage black box + heartbeat + clean-shutdown marker + recover) → 3 JS detector +
-demo harness → 5 WebGPU → 6 WASM → 7 Reporting API + iOS hardening. See
+demo harness → 5 WebGPU → 6 WASM → 7 Reporting API + iOS hardening. **Phase 7 must also close the
+one open on-device validation** — capture a real `wasDiscarded:true` discard (iOS 18.7/8 GB resisted
+it twice; try native-app pressure + the add-to-homescreen PWA path). See [SPEC §0](./SPEC.md#0-resolved-decisions--open-questions). See
 [SPEC §0](./SPEC.md#0-resolved-decisions--open-questions) for resolved decisions and remaining open
 questions (multi-tab keying, retention, `onCrashRecovered` ack).

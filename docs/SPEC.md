@@ -47,6 +47,18 @@ These supersede anything below that contradicts them.
 - **`onMemoryPressure` source:** no `performance.memory` on Safari; define a cross-browser trigger.
 - **`attachGPUDevice` when the `webgpu` detector is disabled:** define no-op / queue / auto-enable.
 
+**Open validation (on-device, not a design question):**
+
+- **Capture a real `wasDiscarded:true` discard.** The discard-suppressor in `classifyLoad` is
+  unit-tested and the everyday backgrounding cases (app-switch, BFCache tab-switch) are device-
+  confirmed to not false-positive — but an _actual_ iOS tab discard with `wasDiscarded:true` has
+  **not** been observed. iOS 18.7 on an 8 GB iPhone 15 Pro resisted it twice (research §2's spike,
+  and again 2026-05-29 under the Phase 3 demo with 4 WebGL aquariums + YouTube + Maps). Non-blocking
+  (`wasDiscarded` can only ever _suppress_ a crash, never create a false positive), but it's the one
+  unconfirmed link in the §9 no-false-positive guarantee. Remaining levers: native-app memory
+  pressure, and the add-to-homescreen PWA path (tighter iOS limits). Tracked for Phase 7 (iOS
+  hardening). See [research §2](./research/02-ios-discard-vs-crash.md).
+
 ---
 
 ## 1. Problem

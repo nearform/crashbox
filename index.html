@@ -131,26 +131,354 @@ $ npx serve
       import React from "react";
       import { createRoot } from "react-dom/client";
       import htm from "htm";
-      // eslint-disable-next-line no-unused-vars
       import * as crashbox from "./src/index.js";
 
       const html = htm.bind(React.createElement);
+      const { useState, useEffect, useCallback } = React;
 
-      const App = () => html`
-        <div className="container">
-          <div className="header">
-            <h1>crashbox</h1>
-            <p>
-              Local-first crash black box for the browser. Survives hard tab
-              kills and surfaces the recovered state on next load.
-            </p>
-          </div>
-          <div className="demo-section">
-            <h2>Demo coming soon</h2>
-            <p>TODO: build the crashbox demo here.</p>
-          </div>
-        </div>
+      // Initialize BEFORE render so recover-on-load fires and any crash from the *previous*
+      // load is captured synchronously, ready to show at the top of the page.
+      let recoveredRecord = null;
+      crashbox.init({
+        detectors: ["webgpu", "wasm", "js"],
+        onCrashRecovered(record) {
+          recoveredRecord = record;
+        },
+        onMemoryPressure() {
+          crashbox.breadcrumb("onMemoryPressure fired");
+        },
+        onDeviceLossImminent(info) {
+          crashbox.breadcrumb("onDeviceLossImminent", info);
+        },
+      });
+
+      // One-shot capability probe (sync booleans are valid even over plain HTTP — research §6).
+      const supports = (fn, fallback = false) => {
+        try {
+          return fn();
+        } catch {
+          return fallback;
+        }
+      };
+      const CAPABILITIES = {
+        webgpu: supports(() => !!navigator.gpu),
+        wasm: typeof WebAssembly !== "undefined",
+        "longtask observer": supports(() =>
+          PerformanceObserver.supportedEntryTypes.includes("longtask"),
+        ),
+        "performance.memory": supports(() => !!performance.memory),
+        wasDiscarded: supports(() => "wasDiscarded" in document),
+      };
+
+      const readMemoryMB = () =>
+        supports(
+          () =>
+            performance.memory
+              ? Math.round(performance.memory.usedJSHeapSize / 1048576)
+              : null,
+          null,
+        );
+
+      const Badge = ({ kind }) => {
+        const map = {
+          kill: ["hard kill → reload to see recovery", "#c0392b"],
+          catchable: ["catchable (tab survives)", "#2980b9"],
+          manual: ["manual / best-effort", "#8e44ad"],
+        };
+        const [label, color] = map[kind] || ["", "#777"];
+        return html`<span
+          style=${{
+            background: color,
+            color: "#fff",
+            borderRadius: "4px",
+            padding: "2px 8px",
+            fontSize: "0.7em",
+            marginLeft: "8px",
+            whiteSpace: "nowrap",
+          }}
+          >${label}</span
+        >`;
+      };
+
+      const Trigger = ({ label, kind, onClick }) => html`
+        <button
+          className="pure-button"
+          style=${{ margin: "4px", textAlign: "left" }}
+          onClick=${onClick}
+        >
+          ${label}<${Badge} kind=${kind} />
+        </button>
       `;
+
+      const App = () => {
+        const [counter, setCounter] = useState(0);
+        const [status, setStatus] = useState(crashbox.getStatus());
+        const [memMB, setMemMB] = useState(readMemoryMB());
+        const [pressed, setPressed] = useState([]);
+
+        // Continuously snapshot a counter+timestamp so every crash leaves a verifiable trail.
+        useEffect(() => {
+          const id = setInterval(() => {
+            setCounter((c) => {
+              const next = c + 1;
+              crashbox.setSnapshot({ counter: next, ts: Date.now() });
+              return next;
+            });
+            setStatus(crashbox.getStatus());
+            setMemMB(readMemoryMB());
+          }, 1000);
+          return () => clearInterval(id);
+        }, []);
+
+        // Breadcrumb on every action + mirror it in the on-page log.
+        const note = useCallback((msg, data) => {
+          crashbox.breadcrumb(msg, data);
+          setPressed((p) => [...p.slice(-19), msg]);
+        }, []);
+
+        // --- triggers ---------------------------------------------------------
+        const cleanReload = () => {
+          note("clean reload (negative control)");
+          location.reload(); // fires pagehide{persisted:false} → clean-shutdown marker
+        };
+        const uncaughtException = () => {
+          note("trigger: uncaught exception");
+          setTimeout(() => {
+            throw new Error("crashbox demo: uncaught exception");
+          }, 0);
+        };
+        const unhandledRejection = () => {
+          note("trigger: unhandled rejection");
+          Promise.reject(new Error("crashbox demo: unhandled rejection"));
+        };
+        const longTask = () => {
+          note("trigger: long task (3s main-thread block)");
+          const end = Date.now() + 3000;
+          while (Date.now() < end) {
+            /* block */
+          }
+        };
+        const wasmBlowup = () => {
+          note("trigger: WASM linear-memory blowup");
+          // Mirrors research spike 03: maximum + touching each grown page forces a PHYSICAL
+          // commit (raw grow() is lazy), which actually hard-kills the tab on iOS. The kill
+          // leaves no RangeError to catch, so we breadcrumb a memory-near-cap marker at
+          // milestones — that's what classifyReason keys off for "oom" (and previews Phase 6).
+          const mem = new WebAssembly.Memory({ initial: 1, maximum: 65536 });
+          const STEP = 256; // 256 * 64 KB = 16 MB per step
+          let committedPages = 1;
+          let lastMarkedMB = 0;
+          const grow = () => {
+            try {
+              const before = mem.buffer.byteLength;
+              mem.grow(STEP);
+              committedPages += STEP;
+              const view = new Uint8Array(mem.buffer);
+              for (let i = before; i < view.length; i += 4096) view[i] = 1;
+              const mb = Math.round((committedPages * 65536) / 1048576);
+              if (mb - lastMarkedMB >= 512) {
+                lastMarkedMB = mb;
+                crashbox.breadcrumb(`wasm memory ~${mb} MB`, {
+                  signal: "memory-near-cap",
+                  mb,
+                });
+              }
+              setTimeout(grow, 0);
+            } catch (e) {
+              note(`WASM grow threw (caught, tab survived): ${e.message}`);
+            }
+          };
+          grow();
+        };
+        const jsHeapExhaustion = () => {
+          note("trigger: JS heap exhaustion (may hard-kill the tab)");
+          const sink = [];
+          for (;;) sink.push(new ArrayBuffer(64 * 1048576));
+        };
+        const webgpuDeviceLoss = async () => {
+          if (!CAPABILITIES.webgpu) return note("WebGPU unavailable");
+          note("trigger: WebGPU graceful device loss");
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            const device = await adapter.requestDevice();
+            crashbox.attachGPUDevice(device);
+            device.lost.then((info) =>
+              note(`device.lost: ${info.reason}`, { reason: info.reason }),
+            );
+            device.destroy();
+          } catch (e) {
+            note(`WebGPU error: ${e.message}`);
+          }
+        };
+        const webgpuOversizedBuffer = async () => {
+          if (!CAPABILITIES.webgpu) return note("WebGPU unavailable");
+          note("trigger: WebGPU oversized buffer (GPUOutOfMemoryError)");
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            const device = await adapter.requestDevice();
+            crashbox.attachGPUDevice(device);
+            device.pushErrorScope("out-of-memory");
+            device.createBuffer({
+              size: 0xffffffff,
+              usage: GPUBufferUsage.STORAGE,
+            });
+            const err = await device.popErrorScope();
+            note(`GPUOutOfMemoryError: ${err ? err.message : "none"}`, {
+              signal: "webgpu-device-lost",
+            });
+          } catch (e) {
+            note(`WebGPU error: ${e.message}`);
+          }
+        };
+
+        const recovered = recoveredRecord;
+
+        return html`
+          <div className="container">
+            <div className="header">
+              <h1>crashbox</h1>
+              <p>
+                Local-first crash black box for the browser. Trigger a crash,
+                let the tab die, reload, and confirm the recovered record below.
+              </p>
+            </div>
+
+            ${recovered
+              ? html`<div
+                  className="demo-section"
+                  style=${{ borderLeft: "6px solid #c0392b" }}
+                >
+                  <h2>⚠️ Recovered crash from the previous session</h2>
+                  <p>
+                    <strong>reason:</strong> ${recovered.reason} ·
+                    <strong>session:</strong> ${recovered.sessionId} ·
+                    <strong>time of death:</strong>
+                    ${Math.round((Date.now() - recovered.lastSeen) / 1000)}s ago
+                    · <strong>corroborated:</strong>
+                    ${String(recovered.corroborated)}
+                  </p>
+                  <strong>snapshot</strong>
+                  <pre>${JSON.stringify(recovered.snapshot, null, 2)}</pre>
+                  <strong>breadcrumb tail</strong>
+                  <pre>
+${recovered.breadcrumbs
+                      .map(
+                        (c) =>
+                          `${c.msg}${c.data ? "  " + JSON.stringify(c.data) : ""}`,
+                      )
+                      .join("\n")}</pre
+                  >
+                </div>`
+              : html`<div className="demo-section">
+                  <h2>No crash recovered ✅</h2>
+                  <p>
+                    Clean load (or a clean reload / iOS discard). Trigger a hard
+                    kill below, then reload to see the recovered record here.
+                  </p>
+                </div>`}
+
+            <div className="demo-section">
+              <h2>Live session</h2>
+              <p>
+                <strong>sessionId:</strong>
+                ${" "}${status ? status.sessionId : "—"}<br />
+                <strong>snapshot counter:</strong> ${" "}${counter} ·
+                <strong>breadcrumbs:</strong>
+                ${" "}${status ? status.breadcrumbCount : 0}<br />
+                <strong>JS heap:</strong>
+                ${" "}${memMB === null
+                  ? "unsupported (iOS Safari)"
+                  : memMB + " MB"}
+              </p>
+              <strong>capabilities</strong>
+              <pre>${JSON.stringify(CAPABILITIES, null, 2)}</pre>
+              <strong>recent actions</strong>
+              <pre>${pressed.join("\n") || "(press a trigger)"}</pre>
+            </div>
+
+            <div className="demo-section">
+              <h2>Negative control</h2>
+              <${Trigger}
+                label="Clean reload"
+                kind="catchable"
+                onClick=${cleanReload}
+              />
+              <p>Must produce <strong>no</strong> crash record after reload.</p>
+            </div>
+
+            <div className="demo-section">
+              <h2>WebGPU triggers</h2>
+              <p style=${{ color: "#8e44ad" }}>
+                Auto-detection (wrapping <code>device.lost</code> /
+                <code>uncapturederror</code>) lands in Phase 5; these buttons
+                breadcrumb manually for now.
+              </p>
+              <${Trigger}
+                label="Graceful device loss (device.destroy)"
+                kind="manual"
+                onClick=${webgpuDeviceLoss}
+              />
+              <${Trigger}
+                label="Oversized buffer (GPUOutOfMemoryError)"
+                kind="manual"
+                onClick=${webgpuOversizedBuffer}
+              />
+            </div>
+
+            <div className="demo-section">
+              <h2>WASM / memory triggers</h2>
+              <${Trigger}
+                label="WASM linear-memory blowup → RangeError"
+                kind="kill"
+                onClick=${wasmBlowup}
+              />
+              <${Trigger}
+                label="JS heap exhaustion"
+                kind="kill"
+                onClick=${jsHeapExhaustion}
+              />
+            </div>
+
+            <div className="demo-section">
+              <h2>General / JS triggers</h2>
+              <${Trigger}
+                label="Uncaught exception"
+                kind="catchable"
+                onClick=${uncaughtException}
+              />
+              <${Trigger}
+                label="Unhandled rejection"
+                kind="catchable"
+                onClick=${unhandledRejection}
+              />
+              <${Trigger}
+                label="Long task (3s block)"
+                kind="catchable"
+                onClick=${longTask}
+              />
+            </div>
+
+            <div className="demo-section">
+              <h2>iOS Safari manual cases (no button)</h2>
+              <ul>
+                <li>
+                  <strong>Tab discard:</strong> background this tab, open many
+                  others to force iOS to discard it, then return. Must produce
+                  ${" "}<strong>no</strong> crash record (the discard-vs-crash
+                  guard).
+                </li>
+                <li>
+                  <strong>In-browser LLM OOM (flagship):</strong> load a
+                  quantized model deliberately too large for the device (ideally
+                  from a home-screen PWA, where memory limits are tighter). The
+                  tab dies with no event → recovers as <code>oom</code> /
+                  ${" "}<code>hard-kill</code> on the next load.
+                </li>
+              </ul>
+            </div>
+          </div>
+        `;
+      };
 
       const root = createRoot(document.getElementById("root"));
       root.render(html`<${App} />`);

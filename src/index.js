@@ -8,6 +8,7 @@
 
 import { RingBuffer, serializeSnapshot, parseSnapshot } from "./blackbox.js";
 import { classifyLoad, classifyReason } from "./inference.js";
+import { enableDetectors } from "./detectors.js";
 
 /** @typedef {import("./types.js").CrashboxOptions} CrashboxOptions */
 /** @typedef {import("./types.js").CrashRecord} CrashRecord */
@@ -54,6 +55,8 @@ let active = null;
 let recorder = null;
 /** @type {ReturnType<typeof setInterval> | null} */
 let heartbeatId = null;
+/** @type {import("./detectors.js").Detector[]} */
+let detectorHandles = [];
 let lifecycleAttached = false;
 
 // --- guarded environment access (so init is safe in Node/SSR) --------------
@@ -174,6 +177,17 @@ const stopHeartbeat = () => {
     clearInterval(heartbeatId);
     heartbeatId = null;
   }
+};
+
+const stopDetectors = () => {
+  for (const d of detectorHandles) {
+    try {
+      d.stop();
+    } catch {
+      // a detector's teardown must not break init/re-init
+    }
+  }
+  detectorHandles = [];
 };
 
 const startHeartbeat = () => {
@@ -298,6 +312,7 @@ const recoverPrevious = () => {
 export const init = (options = {}) => {
   active = { ...DEFAULTS, ...options };
   stopHeartbeat();
+  stopDetectors();
 
   // 1. Recover the previous session before we overwrite the "current" pointer.
   const recovered = recoverPrevious();
@@ -331,7 +346,14 @@ export const init = (options = {}) => {
   startHeartbeat();
   attachLifecycle();
 
-  // Phase 3+: enableDetectors({ breadcrumb, options: active }) wires js/webgpu/wasm sources.
+  // 4. Detectors enrich the trail (js default-on; webgpu/wasm opt-in, Phase 5/6). They emit
+  //    breadcrumbs via the public recorder, so a caught error/stall shows up in the next
+  //    load's crash record and feeds classifyReason.
+  try {
+    detectorHandles = enableDetectors({ breadcrumb, options: active });
+  } catch {
+    detectorHandles = []; // a detector failing to attach must not break init
+  }
 };
 
 /**
@@ -394,3 +416,17 @@ export const attachGPUDevice = (device) => {
  * @returns {ResolvedOptions | null}
  */
 export const getActiveOptions = () => active;
+
+/**
+ * Live status of the current session, or null before `init`. Introspection for the demo /
+ * on-device debugging (lets a tester correlate which session id later shows up as a crash).
+ * @returns {{ sessionId: string, lastSeen: number, breadcrumbCount: number } | null}
+ */
+export const getStatus = () =>
+  recorder
+    ? {
+        sessionId: recorder.sessionId,
+        lastSeen: recorder.lastSeen,
+        breadcrumbCount: recorder.ring.size,
+      }
+    : null;

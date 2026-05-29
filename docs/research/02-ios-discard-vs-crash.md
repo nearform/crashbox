@@ -2,7 +2,9 @@
 
 > SPEC §8 #2. **Highest false-positive risk on the primary target.** Status: **discriminator
 > synthesized** on iOS 18.7 / Safari 26.3 (iPhone 15 Pro) — see [Synthesized discriminator](#synthesized-discriminator-ios-187--safari-263).
-> Open: capture an actual `wasDiscarded:true` discard (iOS resisted it; non-blocking).
+> Open: capture an actual `wasDiscarded:true` discard (iOS resisted it twice — see
+> [Synthesized discriminator](#synthesized-discriminator-ios-187--safari-263); non-blocking).
+> Tracked in [SPEC §0](../SPEC.md#0-resolved-decisions--open-questions) for Phase 7.
 
 ## Question
 
@@ -120,6 +122,14 @@ Three distinct non-crash "leaving" signatures, none of which may be read as a cr
 
 _(Open: capture an actual `wasDiscarded:true` discard — iOS 18.7 resisted it — and the clean-reload
 (D) control. Neither blocks the heuristic, since `wasDiscarded:true` is only ever a suppressor.)_
+
+**Follow-up 2026-05-29 (Phase 3 demo, same device):** discard resisted **again** under 4 WebGL
+aquariums (30k fish) + YouTube 4K + Google Maps 3D — the backgrounded crashbox tab stayed alive, no
+`wasDiscarded`. Web-tab pressure is ineffective (all Safari tabs share one budget); remaining levers
+are native-app memory pressure and the add-to-homescreen PWA. Meanwhile the implemented heuristic
+**passed on-device**: app-switch (home) and Safari tab-switch (BFCache) both produced no false-
+positive crash, and a genuine in-tab WASM OOM kill (~1.5–2 GB physical commit, no death event)
+recovered correctly as `oom` from `memory-near-cap` breadcrumbs.
 
 ## Decision this drives
 
