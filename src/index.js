@@ -1,13 +1,30 @@
-// crashbox public API (SPEC §5). Phase 0 implements the surface as safe no-ops that
-// resolve + hold options. The rest is wired here directly (lean v1 — localStorage only,
-// no ports/adapters/IDB): heartbeat (setInterval → sync write), the pagehide
-// clean-shutdown marker, recover-on-load, and breadcrumb/snapshot persistence, using the
-// pure helpers in ./blackbox.js + ./inference.js and the wrappers in ./detectors.js.
+// crashbox public API (SPEC §5) + browser wiring (lean v1 — localStorage only, no
+// ports/adapters/IDB). The spine (research §2 / SPEC §2): persist a tiny black box on a
+// throttled cadence + a heartbeat, write a clean-shutdown marker on graceful exit, and on the
+// next load decide "snapshot present + no clean-shutdown marker = the previous session crashed"
+// via the pure helpers in ./blackbox.js + ./inference.js. Detectors (./detectors.js) are wired
+// in Phase 3+. All browser access is guarded so importing/`init`-ing in Node or SSR is a safe
+// no-op (degrades to in-memory, no persistence/recover) rather than throwing.
+
+import { RingBuffer, serializeSnapshot, parseSnapshot } from "./blackbox.js";
+import { classifyLoad, classifyReason } from "./inference.js";
 
 /** @typedef {import("./types.js").CrashboxOptions} CrashboxOptions */
 /** @typedef {import("./types.js").CrashRecord} CrashRecord */
 /** @typedef {import("./types.js").Snapshot} Snapshot */
 /** @typedef {import("./types.js").ResolvedOptions} ResolvedOptions */
+/** @typedef {import("./types.js").BlackBoxRecord} BlackBoxRecord */
+/** @typedef {import("./types.js").LoadSignals} LoadSignals */
+
+/**
+ * Live recording state for the current session (in-memory; mirrored to localStorage).
+ * @typedef {Object} Recorder
+ * @property {string} sessionId
+ * @property {RingBuffer} ring
+ * @property {Snapshot | undefined} snapshot
+ * @property {number} lastSeen
+ * @property {boolean} cleanShutdown
+ */
 
 /**
  * Default options. Values chosen from the research spikes:
@@ -24,39 +41,342 @@ export const DEFAULTS = {
   detectors: ["js"],
 };
 
+/** localStorage key namespace. (Multi-tab keying is an open question — see SPEC §0.) */
+const KEY_PREFIX = "crashbox";
+/** Points at the most recent session id, so the next load knows what to recover. */
+const CURRENT_KEY = `${KEY_PREFIX}:current`;
+/** @param {string} id */
+const recordKey = (id) => `${KEY_PREFIX}:record:${id}`;
+
 /** @type {ResolvedOptions | null} */
 let active = null;
+/** @type {Recorder | null} */
+let recorder = null;
+/** @type {ReturnType<typeof setInterval> | null} */
+let heartbeatId = null;
+let lifecycleAttached = false;
+
+// --- guarded environment access (so init is safe in Node/SSR) --------------
+
+/** @returns {Storage | null} */
+const getStorage = () => {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null; // access can throw under some privacy modes
+  }
+};
+
+/** @returns {Window | null} */
+const getWindow = () => {
+  try {
+    return typeof window !== "undefined" ? window : null;
+  } catch {
+    return null;
+  }
+};
+
+const getWasDiscarded = () => {
+  try {
+    // `document.wasDiscarded` is experimental (iOS tab-discard flag) and absent from lib.dom.
+    return (
+      typeof document !== "undefined" &&
+      /** @type {any} */ (document).wasDiscarded === true
+    );
+  } catch {
+    return false;
+  }
+};
+
+/** @returns {string | undefined} */
+const getNavType = () => {
+  try {
+    const entries =
+      typeof performance !== "undefined" && performance.getEntriesByType
+        ? performance.getEntriesByType("navigation")
+        : [];
+    const nav = /** @type {PerformanceNavigationTiming | undefined} */ (
+      entries[0]
+    );
+    return nav ? nav.type : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const makeSessionId = () => {
+  try {
+    if (typeof crypto !== "undefined" && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // fall through to the non-crypto id
+  }
+  return `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
 /**
- * Initialize crashbox.
+ * Return `data` if JSON-safe, else a marker — keeps the persisted record always serializable
+ * so one poison breadcrumb can't permanently break the write path.
+ * @param {Record<string, unknown>} data
+ * @returns {Record<string, unknown>}
+ */
+const jsonSafe = (data) => {
+  try {
+    JSON.stringify(data);
+    return data;
+  } catch {
+    return { "[unserializable]": true };
+  }
+};
+
+// --- persistence ------------------------------------------------------------
+
+/** Synchronously mirror the current recorder to localStorage (research §8 #1: survives OOM). */
+const persist = () => {
+  const storage = getStorage();
+  if (!storage || !recorder) {
+    return;
+  }
+  /** @type {BlackBoxRecord} */
+  const record = {
+    sessionId: recorder.sessionId,
+    breadcrumbs: recorder.ring.toArray(),
+    snapshot: recorder.snapshot,
+    lastSeen: recorder.lastSeen,
+    cleanShutdown: recorder.cleanShutdown,
+  };
+  try {
+    storage.setItem(recordKey(recorder.sessionId), JSON.stringify(record));
+  } catch {
+    // quota / serialization failure — drop this write; in-memory state stays intact.
+  }
+};
+
+/**
+ * @param {Storage} storage
+ * @param {string} id
+ * @returns {BlackBoxRecord | undefined}
+ */
+const readRecord = (storage, id) => {
+  try {
+    const raw = storage.getItem(recordKey(id));
+    return /** @type {BlackBoxRecord | undefined} */ (parseSnapshot(raw));
+  } catch {
+    return undefined; // getItem can throw under privacy modes
+  }
+};
+
+// --- lifecycle --------------------------------------------------------------
+
+const stopHeartbeat = () => {
+  if (heartbeatId !== null) {
+    clearInterval(heartbeatId);
+    heartbeatId = null;
+  }
+};
+
+const startHeartbeat = () => {
+  stopHeartbeat();
+  if (!active || active.heartbeatMs <= 0) {
+    return;
+  }
+  heartbeatId = setInterval(() => {
+    if (recorder) {
+      recorder.lastSeen = Date.now();
+      persist();
+    }
+  }, active.heartbeatMs);
+  // Don't keep a Node test process alive on the timer (no-op in the browser).
+  /** @type {any} */ (heartbeatId)?.unref?.();
+};
+
+/**
+ * `pagehide` with `persisted:false` is the reliable clean-exit signal (SPEC §3/§4; NOT
+ * `beforeunload`/`unload`). `persisted:true` means bfcache (may return) → not a clean shutdown.
+ * @param {PageTransitionEvent} e
+ */
+const onPageHide = (e) => {
+  if (recorder && e && e.persisted === false) {
+    recorder.cleanShutdown = true;
+    persist();
+    stopHeartbeat();
+  }
+};
+
+const attachLifecycle = () => {
+  if (lifecycleAttached) {
+    return;
+  }
+  const win = getWindow();
+  if (!win) {
+    return;
+  }
+  try {
+    win.addEventListener("pagehide", /** @type {EventListener} */ (onPageHide));
+    lifecycleAttached = true;
+  } catch {
+    // no addEventListener — degrade to no clean-shutdown marker (still recovers as crash).
+  }
+};
+
+// --- recover-on-load --------------------------------------------------------
+
+/**
+ * Build the discard-vs-crash signals for a recovered previous session.
+ * @param {BlackBoxRecord} prev
+ * @returns {LoadSignals}
+ */
+const buildSignals = (prev) => ({
+  wasDiscarded: getWasDiscarded(),
+  navigationType: getNavType(),
+  cleanShutdown: prev.cleanShutdown === true,
+  heartbeatAgeMs:
+    typeof prev.lastSeen === "number" ? Date.now() - prev.lastSeen : null,
+  hasLiveSession: true,
+});
+
+/**
+ * Read the previous session, classify it, and return a CrashRecord iff it crashed. The previous
+ * record is consumed (cleared) either way — fire-once delivery (SPEC §0 retention question).
+ * @returns {CrashRecord | null}
+ */
+const recoverPrevious = () => {
+  const storage = getStorage();
+  if (!storage) {
+    return null;
+  }
+  let prevId;
+  try {
+    prevId = storage.getItem(CURRENT_KEY);
+  } catch {
+    return null;
+  }
+  if (!prevId) {
+    return null;
+  }
+  const prev = readRecord(storage, prevId);
+  if (!prev) {
+    return null;
+  }
+
+  const signals = buildSignals(prev);
+  const load = classifyLoad(signals);
+  const breadcrumbs = prev.breadcrumbs || [];
+
+  /** @type {CrashRecord | null} */
+  let recovered = null;
+  if (load === "crash") {
+    recovered = {
+      sessionId: prev.sessionId,
+      reason: classifyReason({ breadcrumbs, signals }),
+      lastSeen: prev.lastSeen,
+      breadcrumbs,
+      snapshot: prev.snapshot,
+      corroborated: false, // Reporting API corroboration is Phase 7
+    };
+  }
+
+  // Consume the previous session regardless of outcome.
+  try {
+    storage.removeItem(recordKey(prevId));
+  } catch {
+    // best-effort cleanup
+  }
+  return recovered;
+};
+
+// --- public API -------------------------------------------------------------
+
+/**
+ * Initialize crashbox: recover the previous session (delivering a crash via `onCrashRecovered`),
+ * then start a fresh session — black box + heartbeat + clean-shutdown marker. Idempotent: a
+ * second call tears down the prior session's timer and starts anew.
  * @param {CrashboxOptions} [options]
  * @returns {void}
  */
 export const init = (options = {}) => {
   active = { ...DEFAULTS, ...options };
-  // Phase 1-3: read previous session from localStorage → classifyLoad (discard guard) →
-  //   classifyReason → if crash, active.onCrashRecovered(record), then clear it; start the
-  //   heartbeat + pagehide{persisted:false} clean-shutdown marker; enableDetectors(...).
+  stopHeartbeat();
+
+  // 1. Recover the previous session before we overwrite the "current" pointer.
+  const recovered = recoverPrevious();
+  if (recovered && active.onCrashRecovered) {
+    try {
+      active.onCrashRecovered(recovered);
+    } catch {
+      // a throwing app callback must not break init
+    }
+  }
+
+  // 2. Start a fresh session and make it the current black box.
+  recorder = {
+    sessionId: makeSessionId(),
+    ring: new RingBuffer(active.breadcrumbLimit),
+    snapshot: undefined,
+    lastSeen: Date.now(),
+    cleanShutdown: false,
+  };
+  persist();
+  const storage = getStorage();
+  if (storage) {
+    try {
+      storage.setItem(CURRENT_KEY, recorder.sessionId);
+    } catch {
+      // non-persistent mode — recording still works in-memory
+    }
+  }
+
+  // 3. Heartbeat + clean-shutdown marker.
+  startHeartbeat();
+  attachLifecycle();
+
+  // Phase 3+: enableDetectors({ breadcrumb, options: active }) wires js/webgpu/wasm sources.
 };
 
 /**
- * Record a breadcrumb. Must be cheap; no allocation beyond the entry.
+ * Record a breadcrumb. Cheap: allocates only the entry; persisted synchronously so the last
+ * crumb before a hard kill survives. No-op before `init`.
  * @param {string} msg
  * @param {Record<string, unknown>} [data]
  * @returns {void}
  */
 export const breadcrumb = (msg, data) => {
-  void msg;
-  void data; // Phase 2: recorder.breadcrumb(msg, data)
+  if (!recorder) {
+    return;
+  }
+  recorder.ring.push({
+    t: Date.now(),
+    msg: String(msg),
+    ...(data !== undefined ? { data: jsonSafe(data) } : {}),
+  });
+  persist();
 };
 
 /**
  * Provide/replace the current state snapshot (JSON-serialized + size-capped before persist).
+ * An un-serializable or oversized snapshot is rejected (the prior snapshot is kept) and the
+ * rejection is breadcrumbed rather than thrown into the app. No-op before `init`.
  * @param {Snapshot} state
  * @returns {void}
  */
 export const setSnapshot = (state) => {
-  void state; // Phase 2: recorder.setSnapshot(state)
+  if (!recorder || !active) {
+    return;
+  }
+  const json = serializeSnapshot(state, active.snapshotMaxBytes);
+  if (json === null) {
+    recorder.ring.push({
+      t: Date.now(),
+      msg: "crashbox: snapshot rejected (cyclic or over snapshotMaxBytes)",
+      data: { signal: "snapshot-rejected" },
+    });
+    persist();
+    return;
+  }
+  // Store a detached JSON clone so later app-side mutation doesn't leak into the box.
+  recorder.snapshot = parseSnapshot(json);
+  persist();
 };
 
 /**
