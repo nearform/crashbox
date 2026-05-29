@@ -1,7 +1,8 @@
 // crashbox public API (SPEC §5). Phase 0 implements the surface as safe no-ops that
-// resolve + hold options; the durable store, heartbeat, detectors, and recovery are
-// wired in Phases 2–3 from the modules under src/ (recorder, heartbeat, registry,
-// inference/recover). Keeping the API real from day one stabilizes the contract + types.
+// resolve + hold options. The rest is wired here directly (lean v1 — localStorage only,
+// no ports/adapters/IDB): heartbeat (setInterval → sync write), the pagehide
+// clean-shutdown marker, recover-on-load, and breadcrumb/snapshot persistence, using the
+// pure helpers in ./blackbox.js + ./inference.js and the wrappers in ./detectors.js.
 
 /** @typedef {import("./types.js").CrashboxOptions} CrashboxOptions */
 /** @typedef {import("./types.js").CrashRecord} CrashRecord */
@@ -33,9 +34,9 @@ let active = null;
  */
 export const init = (options = {}) => {
   active = { ...DEFAULTS, ...options };
-  // Phase 2-3: createCompositeStore(createIdbStore, createLocalStore)
-  //   → createRecorder + createHeartbeat → enableDetectors
-  //   → recover() and, if a CrashRecord results, active.onCrashRecovered(record).
+  // Phase 1-3: read previous session from localStorage → classifyLoad (discard guard) →
+  //   classifyReason → if crash, active.onCrashRecovered(record), then clear it; start the
+  //   heartbeat + pagehide{persisted:false} clean-shutdown marker; enableDetectors(...).
 };
 
 /**

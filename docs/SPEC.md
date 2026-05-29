@@ -22,6 +22,15 @@ These supersede anything below that contradicts them.
   #7 snapshot cost, #2 iOS discard-vs-crash) are validated on throwaway pages first. See
   `docs/research/`.
 - **Real iOS hardware is available** (iPhone 15 Pro) for the iOS-Safari validation.
+- **v1 is localStorage-only; IndexedDB is deferred.** Research §8 #1 showed a synchronous
+  `localStorage` write survives a real iOS OOM kill with zero loss, and the black box is KB-sized, so
+  IDB (the spec's original "primary store") is not needed for v1. Layer 1 below should be read as
+  "localStorage is the store" for now; IDB returns only if a consumer needs a larger/richer box.
+- **Lean module structure (~5 files), not ports/adapters.** The pure logic (`blackbox.js`,
+  `inference.js`) is unit-testable with plain data and no dependency injection; `index.js` does the
+  browser wiring directly and `detectors.js` holds the opt-in wrappers. The earlier ports/adapters
+  scaffold was collapsed (it only bought Node-testability of the orchestration, which the demo +
+  device already cover). See [DESIGN.md](./DESIGN.md). §6 reflects the lean layout.
 
 **Open design questions to resolve during implementation** (see §3/§5 notes):
 
@@ -220,45 +229,34 @@ crashbox.attachGPUDevice(device);
 
 ---
 
-## 6. Package layout (single package — revised)
+## 6. Package layout (single package, lean — revised)
 
-> **Revised from the original monorepo proposal.** crashbox ships as **one** zero-dependency package
-> (`crashbox`), matching the scaffold (`main: src/index.js`, `types: dist/index.d.ts`) and the §5
-> single-import API. The original three-layer split becomes internal modules, not separate npm
-> packages, behind a **ports/adapters boundary** so the pure core is testable under `node --test`
-> while browser glue is isolated.
+> **Revised twice.** Originally a monorepo (rejected → single package), then a ports/adapters
+> scaffold (rejected → lean). crashbox ships as **one** zero-dependency package (`crashbox`), and v1
+> is **~5 files, localStorage-only** (see §0). The pure logic lives in two dependency-free modules
+> that are unit-tested directly; `index.js` does the browser wiring; `detectors.js` holds the opt-in
+> wrappers. IndexedDB and a ports/adapters boundary can return later if a consumer needs them.
 
 ```
 crashbox/
   src/
-    index.js              # public API: init, breadcrumb, setSnapshot, attachGPUDevice
-    session.js            # sessionId + lifecycle constants
-    blackbox/
-      ring.js             # pure breadcrumb ring buffer (drop-oldest, allocation-light)
-      throttle.js         # pure coalescing/throttle scheduler (injected Clock)
-      snapshot.js         # snapshot holder + size cap + serialization guard
-      recorder.js         # ring + snapshot + throttled flush facade (hot path)
-    ports/                # @typedef interfaces only (no platform refs)
-      store.js · clock.js · lifecycle.js
-    adapters/             # the ONLY files touching browser globals
-      idb-store.js · local-store.js · composite-store.js
-      browser-clock.js · browser-lifecycle.js
-    heartbeat.js          # periodic liveness write (Clock + local store)
-    inference/
-      classify.js         # pure: signals -> Reason
-      discard.js          # pure: iOS discard-vs-crash disambiguation
-      recover.js          # load prev session, classify, build CrashRecord
-      reporting-api.js    # optional Chromium Reporting API corroboration
-    detectors/
-      registry.js · js.js · webgpu.js · wasm.js
-  test/                   # node --test; in-memory fakes live here, never in src/
-  docs/                   # this spec + research findings (not published, not in demo copy)
-  index.html              # demo / integration harness (imports ./src/index.js, no build step)
+    index.js        # public API (init/breadcrumb/setSnapshot/attachGPUDevice) + browser wiring:
+                    #   localStorage black box, heartbeat, pagehide{persisted:false} marker, recover
+    types.js        # JSDoc @typedef hub (CrashRecord, Breadcrumb, CrashboxOptions, LoadSignals, …)
+    blackbox.js     # PURE: ring buffer (allocation-light) + JSON snapshot serialize/size-cap
+    inference.js    # PURE: classifyLoad (discard-vs-crash guard) + classifyReason
+    detectors.js    # opt-in source wrappers: js / webgpu / wasm (enrichment, not the crash catch)
+  test/             # node --test; pure modules tested directly. Browser fakes (happy-dom,
+                    #   fake-indexeddb) live here if/when needed, never in src/
+  docs/             # this spec + research findings + DESIGN.md (not published, not in demo copy)
+  index.html        # demo / integration harness (imports ./src/index.js, no build step)
 ```
 
 - Pure JS + JSDoc; `tsc --checkJs --noEmit` in CI for type safety, no build-time transpile required.
 - Core has **no runtime dependencies** and an allocation-light hot path. Test-only fakes
   (`fake-indexeddb`, `happy-dom`) are **devDependencies** imported only from `test/`.
+- `blackbox.js` + `inference.js` are pure (plain data in/out) → unit-tested in Node with no DI;
+  `index.js`/`detectors.js` browser wiring is validated via the demo + the real device.
 
 ---
 

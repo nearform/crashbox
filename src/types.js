@@ -54,6 +54,16 @@
  */
 
 /**
+ * One persisted session's black box (what's written to localStorage, keyed per session).
+ * @typedef {Object} BlackBoxRecord
+ * @property {string} sessionId
+ * @property {Breadcrumb[]} breadcrumbs
+ * @property {Snapshot | undefined} snapshot
+ * @property {number} lastSeen           Epoch ms of the last heartbeat.
+ * @property {boolean} cleanShutdown     True iff a pagehide{persisted:false} marker was written.
+ */
+
+/**
  * Signals captured at load that distinguish a crash from a discard / clean exit
  * (research §8 #2). All optional — availability varies by browser.
  * @typedef {Object} LoadSignals
