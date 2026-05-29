@@ -290,7 +290,7 @@ const recoverPrevious = () => {
       lastSeen: prev.lastSeen,
       breadcrumbs,
       snapshot: prev.snapshot,
-      corroborated: false, // Reporting API corroboration is Phase 7
+      corroborated: false, // Reporting API corroboration deferred — see docs/FUTURE_WORK.md
     };
   }
 

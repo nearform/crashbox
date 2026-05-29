@@ -56,8 +56,9 @@ These supersede anything below that contradicts them.
   and again 2026-05-29 under the Phase 3 demo with 4 WebGL aquariums + YouTube + Maps). Non-blocking
   (`wasDiscarded` can only ever _suppress_ a crash, never create a false positive), but it's the one
   unconfirmed link in the §9 no-false-positive guarantee. Remaining levers: native-app memory
-  pressure, and the add-to-homescreen PWA path (tighter iOS limits). Tracked for Phase 7 (iOS
-  hardening). See [research §2](./research/02-ios-discard-vs-crash.md).
+  pressure, and the add-to-homescreen PWA path (tighter iOS limits). **Non-blocking — not gating
+  launch** (see [FUTURE_WORK.md](./FUTURE_WORK.md)). See
+  [research §2](./research/02-ios-discard-vs-crash.md).
 
 ---
 

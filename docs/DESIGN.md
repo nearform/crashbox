@@ -34,8 +34,14 @@ part that's unit-tested.
 
 0 toolchain + scaffold (done) → 1 pure core (`blackbox` + `inference`, Node-tested) → 2 wire
 `index.js` (localStorage black box + heartbeat + clean-shutdown marker + recover) → 3 JS detector +
-demo harness → 5 WebGPU → 6 WASM → 7 Reporting API + iOS hardening. **Phase 7 must also close the
-one open on-device validation** — capture a real `wasDiscarded:true` discard (iOS 18.7/8 GB resisted
-it twice; try native-app pressure + the add-to-homescreen PWA path). See [SPEC §0](./SPEC.md#0-resolved-decisions--open-questions). See
-[SPEC §0](./SPEC.md#0-resolved-decisions--open-questions) for resolved decisions and remaining open
-questions (multi-tab keying, retention, `onCrashRecovered` ack).
+demo harness → 5 WebGPU → 6 WASM. **Phases 1–6 are the v1 launch scope — all done and
+device-validated.**
+
+The original "Phase 7" (Reporting API corroboration) is **deferred** — Chromium crashes are already
+handled by the heuristic and the Reporting API is Chromium-only/server-bound. It lives in
+[FUTURE_WORK.md](./FUTURE_WORK.md) with the other deferred items (module-internal growth tracking,
+IndexedDB, server upload).
+
+Remaining **v1 launch** work is non-detector: README / usage docs, and the [SPEC §0](./SPEC.md#0-resolved-decisions--open-questions)
+open design questions — multi-tab keying, retention, `onCrashRecovered` ack. The non-blocking
+`wasDiscarded:true` discard capture stays tracked in SPEC §0 (not gating launch).
