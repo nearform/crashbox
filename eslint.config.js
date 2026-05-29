@@ -29,6 +29,12 @@ export default [
       curly: ["error", "all"],
       "func-style": ["error", "expression"],
       "prefer-arrow-callback": "error",
+      // Allow intentionally-unused args/vars when prefixed with `_` (used by
+      // not-yet-implemented stubs and required-but-unused signature params).
+      "no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
     },
   },
   {
