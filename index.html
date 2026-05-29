@@ -120,6 +120,34 @@ $ npx serve
         font-size: 0.8em;
         max-width: 100%;
       }
+      /* Action triggers: full-width, thumb-friendly stack on mobile; content-width
+         buttons that wrap into rows on wider viewports so desktop isn't a tall,
+         half-empty column. */
+      .trigger-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .trigger {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        text-align: left;
+        white-space: normal;
+      }
+      @media (min-width: 48em) {
+        .trigger-group {
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: stretch;
+        }
+        .trigger {
+          width: auto;
+          max-width: 420px;
+        }
+      }
     </style>
     <title>crashbox Demo</title>
   </head>
@@ -212,23 +240,10 @@ $ npx serve
         >`;
       };
 
-      // Full-width on mobile (caps on desktop), label + badge wrap instead of running off-screen.
+      // Layout lives in the .trigger / .trigger-group CSS (media query) so desktop can
+      // switch from a full-width mobile stack to content-width buttons that wrap into rows.
       const Trigger = ({ label, kind, onClick }) => html`
-        <button
-          className="pure-button"
-          style=${{
-            margin: "4px 0",
-            width: "100%",
-            maxWidth: "480px",
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: "8px",
-            textAlign: "left",
-            whiteSpace: "normal",
-          }}
-          onClick=${onClick}
-        >
+        <button className="pure-button trigger" onClick=${onClick}>
           <span>${label}</span><${Badge} kind=${kind} />
         </button>
       `;
@@ -440,11 +455,13 @@ ${recovered.breadcrumbs
 
             <div className="demo-section">
               <h2>Negative control</h2>
-              <${Trigger}
-                label="Clean reload"
-                kind="catchable"
-                onClick=${cleanReload}
-              />
+              <div className="trigger-group">
+                <${Trigger}
+                  label="Clean reload"
+                  kind="catchable"
+                  onClick=${cleanReload}
+                />
+              </div>
               <p>Must produce <strong>no</strong> crash record after reload.</p>
             </div>
 
@@ -458,54 +475,60 @@ ${recovered.breadcrumbs
                 survives); a real GPU OOM hard-kills the tab with no event and
                 is caught by inference on the next load.
               </p>
-              <${Trigger}
-                label="Graceful device loss (device.destroy)"
-                kind="catchable"
-                onClick=${webgpuDeviceLoss}
-              />
-              <${Trigger}
-                label="Oversized buffer (> maxBufferSize)"
-                kind="catchable"
-                onClick=${webgpuOversizedBuffer}
-              />
-              <${Trigger}
-                label="GPU commit flood (writeBuffer until OOM)"
-                kind="kill"
-                onClick=${webgpuCommitFlood}
-              />
+              <div className="trigger-group">
+                <${Trigger}
+                  label="Graceful device loss (device.destroy)"
+                  kind="catchable"
+                  onClick=${webgpuDeviceLoss}
+                />
+                <${Trigger}
+                  label="Oversized buffer (> maxBufferSize)"
+                  kind="catchable"
+                  onClick=${webgpuOversizedBuffer}
+                />
+                <${Trigger}
+                  label="GPU commit flood (writeBuffer until OOM)"
+                  kind="kill"
+                  onClick=${webgpuCommitFlood}
+                />
+              </div>
             </div>
 
             <div className="demo-section">
               <h2>WASM / memory triggers</h2>
-              <${Trigger}
-                label="WASM linear-memory blowup → RangeError"
-                kind="kill"
-                onClick=${wasmBlowup}
-              />
-              <${Trigger}
-                label="JS heap exhaustion"
-                kind="kill"
-                onClick=${jsHeapExhaustion}
-              />
+              <div className="trigger-group">
+                <${Trigger}
+                  label="WASM linear-memory blowup → RangeError"
+                  kind="kill"
+                  onClick=${wasmBlowup}
+                />
+                <${Trigger}
+                  label="JS heap exhaustion"
+                  kind="kill"
+                  onClick=${jsHeapExhaustion}
+                />
+              </div>
             </div>
 
             <div className="demo-section">
               <h2>General / JS triggers</h2>
-              <${Trigger}
-                label="Uncaught exception"
-                kind="catchable"
-                onClick=${uncaughtException}
-              />
-              <${Trigger}
-                label="Unhandled rejection"
-                kind="catchable"
-                onClick=${unhandledRejection}
-              />
-              <${Trigger}
-                label="Long task (3s block)"
-                kind="catchable"
-                onClick=${longTask}
-              />
+              <div className="trigger-group">
+                <${Trigger}
+                  label="Uncaught exception"
+                  kind="catchable"
+                  onClick=${uncaughtException}
+                />
+                <${Trigger}
+                  label="Unhandled rejection"
+                  kind="catchable"
+                  onClick=${unhandledRejection}
+                />
+                <${Trigger}
+                  label="Long task (3s block)"
+                  kind="catchable"
+                  onClick=${longTask}
+                />
+              </div>
             </div>
 
             <div className="demo-section">
