@@ -186,3 +186,77 @@ test("init({ debug: true }) attaches window.__crashbox with introspection helper
   assert.ok(removed.every((k) => k.startsWith("crashbox:")));
   assert.deepEqual(handle.dump(), {});
 });
+
+// --- namespace isolation (co-hosted apps on one origin) -------------------
+
+test("two namespaces on one origin don't collide", () => {
+  // App "a" runs and crashes (no clean shutdown).
+  crashbox.init({ namespace: "a" });
+  crashbox.breadcrumb("a-event");
+  // App "b" inits — must not see a's crash, nor consume a's record.
+  const bRecovered = initCapturing({ namespace: "b" });
+  assert.equal(bRecovered, null, "app b sees no crash in its own namespace");
+  // App "a" reloads — still recovers its own crash.
+  const aRecovered = initCapturing({ namespace: "a" });
+  assert.ok(aRecovered, "app a recovers its own crash after b ran");
+});
+
+test("namespaced keys are prefixed crashbox:<namespace>:", () => {
+  localStorage.clear();
+  crashbox.init({ namespace: "myapp" });
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k) {
+      keys.push(k);
+    }
+  }
+  assert.ok(
+    keys.every((k) => k.startsWith("crashbox:myapp:")),
+    `all keys namespaced, got ${JSON.stringify(keys)}`,
+  );
+});
+
+// --- retention sweep ------------------------------------------------------
+
+/**
+ * @param {string} id
+ * @param {number} lastSeen
+ */
+const seedRecord = (id, lastSeen) => {
+  localStorage.setItem(
+    `crashbox:record:${id}`,
+    JSON.stringify({
+      sessionId: id,
+      breadcrumbs: [],
+      snapshot: undefined,
+      lastSeen,
+      cleanShutdown: false,
+    }),
+  );
+};
+
+test("retention sweep removes records older than retentionMs", () => {
+  seedRecord("stale", Date.now() - 60000); // 60s old
+  crashbox.init({ retentionMs: 1000 });
+  assert.equal(localStorage.getItem("crashbox:record:stale"), null);
+});
+
+test("retention sweep keeps fresh records", () => {
+  seedRecord("fresh", Date.now());
+  crashbox.init({ retentionMs: 1000 });
+  assert.ok(localStorage.getItem("crashbox:record:fresh"));
+});
+
+test("retentionMs sweeps within the active namespace only", () => {
+  // A stale orphan under namespace "a" should not be touched by an init in namespace "b".
+  localStorage.setItem(
+    "crashbox:a:record:stale",
+    JSON.stringify({ sessionId: "stale", breadcrumbs: [], lastSeen: 0 }),
+  );
+  crashbox.init({ namespace: "b", retentionMs: 1000 });
+  assert.ok(
+    localStorage.getItem("crashbox:a:record:stale"),
+    "another namespace's records are out of scope for this app's sweep",
+  );
+});

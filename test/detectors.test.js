@@ -35,6 +35,7 @@ const makeCtx = (names) => {
       heartbeatMs: 2000,
       breadcrumbLimit: 100,
       snapshotMaxBytes: 32768,
+      retentionMs: 604800000,
       detectors: names,
     }),
   };
@@ -216,6 +217,7 @@ const makeWebgpuCtx = () => {
       heartbeatMs: 2000,
       breadcrumbLimit: 100,
       snapshotMaxBytes: 32768,
+      retentionMs: 604800000,
       detectors: ["webgpu"],
       /** @param {{ reason?: string }} info */
       onDeviceLossImminent: (info) => imminent.push(info),
@@ -377,6 +379,7 @@ const makeWasmCtx = () => {
       heartbeatMs: 2000,
       breadcrumbLimit: 100,
       snapshotMaxBytes: 32768,
+      retentionMs: 604800000,
       detectors: ["wasm"],
       onMemoryPressure: () => {
         pressure += 1;

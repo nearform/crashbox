@@ -43,6 +43,9 @@
  * @property {number} [breadcrumbLimit]    Ring-buffer capacity. Default 100.
  * @property {number} [snapshotMaxBytes]   JSON byte cap for snapshots. Default 32768.
  * @property {DetectorName[]} [detectors]  Enabled detectors. Default ["js"].
+ * @property {number} [retentionMs]        Sweep orphaned records older than this on init. Default 7d.
+ * @property {string} [namespace]          Isolate co-hosted apps on a shared origin: keys become
+ *                                         `crashbox:<namespace>:…`. No default (bare `crashbox:`).
  * @property {boolean} [debug]             Attach a `window.__crashbox` debug handle. Off by
  *                                         default — opt-in so the SDK never pollutes a host's
  *                                         namespace unless asked.
@@ -53,7 +56,7 @@
 
 /**
  * Fully-resolved options (defaults applied). Callbacks remain optional.
- * @typedef {Required<Pick<CrashboxOptions, "heartbeatMs" | "breadcrumbLimit" | "snapshotMaxBytes" | "detectors">> & CrashboxOptions} ResolvedOptions
+ * @typedef {Required<Pick<CrashboxOptions, "heartbeatMs" | "breadcrumbLimit" | "snapshotMaxBytes" | "detectors" | "retentionMs">> & CrashboxOptions} ResolvedOptions
  */
 
 /**

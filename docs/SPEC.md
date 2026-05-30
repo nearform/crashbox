@@ -32,20 +32,23 @@ These supersede anything below that contradicts them.
   scaffold was collapsed (it only bought Node-testability of the orchestration, which the demo +
   device already cover). See [DESIGN.md](./DESIGN.md). §6 reflects the lean layout.
 
-**Open design questions to resolve during implementation** (see §3/§5 notes):
+**Design questions raised during planning — resolution status:**
 
-- **Multi-tab / shared-origin:** IndexedDB + localStorage are origin-shared. Concurrent tabs writing
-  heartbeat / clean-shutdown to global keys corrupt inference. Need per-session/tab key namespacing
-  and a "which session am I recovering" rule.
-- **Retention / cleanup:** when are old sessions' snapshots evicted (after `onCrashRecovered`)?
-- **`onCrashRecovered` delivery:** fired once vs. until acknowledged? Needs an ack/clear step.
-- **Snapshot serialization contract:** `structuredClone` (IDB) vs JSON (localStorage) differ in
-  capability. Define allowed input and behavior on un-serializable state. (Drives §8 #7.)
-- **Reason precedence:** explicit priority when multiple signals fire (e.g. `device.lost` +
-  memory-near-cap).
-- **Heartbeat staleness threshold** for `hard-kill` classification (e.g. `> N × heartbeatMs`).
-- **`onMemoryPressure` source:** no `performance.memory` on Safari; define a cross-browser trigger.
-- **`attachGPUDevice` when the `webgpu` detector is disabled:** define no-op / queue / auto-enable.
+- **Multi-tab / shared-origin:** **resolved for co-hosted apps** via a `namespace` option
+  (`crashbox:<ns>:…` keys). Same-app multiple tabs **deferred** — needs a crash-surviving tab-scoped
+  key (see [FUTURE_WORK](./FUTURE_WORK.md)).
+- **Retention / cleanup:** **resolved** — a `retentionMs` sweep evicts orphaned records on `init`.
+- **`onCrashRecovered` delivery/ack:** fire-once in v1; defer-delete/ack **deferred**
+  ([FUTURE_WORK](./FUTURE_WORK.md)).
+- **Snapshot serialization contract:** **resolved** — JSON, size-capped; cyclic/oversized snapshots
+  are rejected and breadcrumbed (Phase 1).
+- **Reason precedence:** **resolved** — `webgpu-device-lost` → `oom` → `hard-kill` → `unknown`
+  (implemented + unit-tested).
+- **Heartbeat staleness threshold:** **resolved (binary)** — any recorded heartbeat ⇒ `hard-kill`;
+  `> N × heartbeatMs` tuning deferred ([FUTURE_WORK](./FUTURE_WORK.md)).
+- **`onMemoryPressure` source:** **resolved** — WASM linear-memory growth tracking (Phase 6; the
+  sole memory signal on iOS).
+- **`attachGPUDevice` when the `webgpu` detector is disabled:** **resolved** — no-op.
 
 **Open validation (on-device, not a design question):**
 

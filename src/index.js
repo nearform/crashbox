@@ -33,6 +33,8 @@ import { enableDetectors } from "./detectors.js";
  * - `breadcrumbLimit` 100 — SPEC default; trivially within the ~38 GB iOS quota (research §6/#9).
  * - `snapshotMaxBytes` 32768 — JSON snapshot cap; sub-50µs to serialize at this size (research §8 #7).
  * - `detectors` ["js"] — JS detector default-on; webgpu/wasm are opt-in.
+ * - `retentionMs` 7 days — orphaned records (e.g. from a tab that never reopened) older than this
+ *   are swept on init. `namespace` has no default — unset means the bare `crashbox:` prefix.
  * @type {ResolvedOptions}
  */
 export const DEFAULTS = {
@@ -40,14 +42,21 @@ export const DEFAULTS = {
   breadcrumbLimit: 100,
   snapshotMaxBytes: 32768,
   detectors: ["js"],
+  retentionMs: 7 * 24 * 60 * 60 * 1000,
 };
 
-/** localStorage key namespace. (Multi-tab keying is an open question — see SPEC §0.) */
-const KEY_PREFIX = "crashbox";
+/**
+ * localStorage key prefix. Bare `crashbox` by default; `crashbox:<namespace>` when
+ * `options.namespace` is set, so two apps sharing one origin don't collide (origin-shared
+ * localStorage). Set in `init`. (Same-app multi-tab keying is deferred — see docs/FUTURE_WORK.md.)
+ */
+const DEFAULT_PREFIX = "crashbox";
+let keyPrefix = DEFAULT_PREFIX;
 /** Points at the most recent session id, so the next load knows what to recover. */
-const CURRENT_KEY = `${KEY_PREFIX}:current`;
+const currentKey = () => `${keyPrefix}:current`;
+const recordKeyPrefix = () => `${keyPrefix}:record:`;
 /** @param {string} id */
-const recordKey = (id) => `${KEY_PREFIX}:record:${id}`;
+const recordKey = (id) => `${recordKeyPrefix()}${id}`;
 
 /** @type {ResolvedOptions | null} */
 let active = null;
@@ -265,7 +274,7 @@ const recoverPrevious = () => {
   }
   let prevId;
   try {
-    prevId = storage.getItem(CURRENT_KEY);
+    prevId = storage.getItem(currentKey());
   } catch {
     return null;
   }
@@ -303,6 +312,41 @@ const recoverPrevious = () => {
   return recovered;
 };
 
+/**
+ * Sweep orphaned records (e.g. from a tab that crashed and never reopened, so its record was never
+ * consumed) older than `retentionMs`. Bounds localStorage growth. Best-effort; runs on init.
+ */
+const sweepStaleRecords = () => {
+  const storage = getStorage();
+  const ttl = active ? active.retentionMs : 0;
+  if (!storage || !(ttl > 0)) {
+    return;
+  }
+  const now = Date.now();
+  const prefix = recordKeyPrefix();
+  /** @type {string[]} */
+  const stale = [];
+  try {
+    for (let i = 0; i < storage.length; i++) {
+      const k = storage.key(i);
+      if (!k || !k.startsWith(prefix)) {
+        continue;
+      }
+      const rec = /** @type {any} */ (parseSnapshot(storage.getItem(k)));
+      const lastSeen =
+        rec && typeof rec.lastSeen === "number" ? rec.lastSeen : 0;
+      if (now - lastSeen > ttl) {
+        stale.push(k); // collect first — removing mid-iteration shifts indices
+      }
+    }
+    for (const k of stale) {
+      storage.removeItem(k);
+    }
+  } catch {
+    // best-effort sweep
+  }
+};
+
 // --- debug handle (opt-in via options.debug) --------------------------------
 
 /** Every `crashbox:*` key currently in localStorage. @returns {string[]} */
@@ -313,7 +357,7 @@ const debugKeys = () => {
   if (storage) {
     for (let i = 0; i < storage.length; i++) {
       const k = storage.key(i);
-      if (k && k.startsWith(`${KEY_PREFIX}:`)) {
+      if (k && k.startsWith(`${keyPrefix}:`)) {
         out.push(k);
       }
     }
@@ -388,12 +432,17 @@ const attachDebugHandle = () => {
  */
 export const init = (options = {}) => {
   active = { ...DEFAULTS, ...options };
+  keyPrefix = active.namespace
+    ? `${DEFAULT_PREFIX}:${active.namespace}`
+    : DEFAULT_PREFIX;
   stopHeartbeat();
   stopDetectors();
 
-  // 1. Recover the previous session before we overwrite the "current" pointer.
+  // 1. Recover the previous session before we overwrite the "current" pointer, then sweep
+  //    orphaned records (from tabs that never reopened) past the retention window.
   const recovered = recoverPrevious();
   lastRecovered = recovered;
+  sweepStaleRecords();
   if (recovered && active.onCrashRecovered) {
     try {
       active.onCrashRecovered(recovered);
@@ -414,7 +463,7 @@ export const init = (options = {}) => {
   const storage = getStorage();
   if (storage) {
     try {
-      storage.setItem(CURRENT_KEY, recorder.sessionId);
+      storage.setItem(currentKey(), recorder.sessionId);
     } catch {
       // non-persistent mode — recording still works in-memory
     }

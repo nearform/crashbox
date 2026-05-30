@@ -4,11 +4,35 @@ Deliberately **out of scope for the current v1 launch effort.** These are real, 
 forgotten — but none block v1, and several are low ROI for the primary target (iOS Safari). Pull one
 up here into a phase only when a consumer need or a launch decision justifies it.
 
-> **Not future work — these are the v1 finish line** (kept in [SPEC §0](./SPEC.md#0-resolved-decisions--open-questions)
-> and [DESIGN](./DESIGN.md), not here): README / usage docs, multi-tab key namespacing, retention /
-> cleanup of orphaned records, and `onCrashRecovered` delivery/ack.
+> **Shipped in v1, not here:** README / usage docs, a `namespace` option (isolates co-hosted apps
+> on one origin), and a `retentionMs` orphaned-record sweep.
 
 ---
+
+## Same-app multi-tab recovery
+
+Two tabs of the **same** app on one origin share localStorage keys (the `crashbox:<ns>:current`
+pointer and the records), so concurrent tabs can interfere with each other's recovery — one tab's
+`init` can recover and delete another's still-live session. (Different apps avoid this with distinct
+`namespace`s; this is specifically the _same app, multiple tabs_ case, which v1 does not solve.)
+
+Clean per-tab recovery needs a **tab-scoped value that survives the crash-reload** so the reloaded
+tab can find its own prior session. `sessionStorage` is the only candidate, but whether it survives
+an iOS Safari OOM crash-reload is **unverified** (the spec says it survives "reloads and restores,"
+but iOS Safari has documented sessionStorage quirks, and we haven't device-tested the crash case).
+There is no no-regret fallback: a brand-new tab and a tab that lost `sessionStorage` are
+indistinguishable, so falling back to a global pointer reintroduces the collision for every new tab.
+
+**Decision (v1):** descoped. If revisited, first settle the empirical question with a device probe
+(`sessionStorage.setItem` before a crash, `getItem` after the reload). If it survives, implement
+strict per-tab keying; if not, this stays a documented limitation.
+
+## `onCrashRecovered` delivery / acknowledgement
+
+Delivery is **fire-once**: the previous record is consumed (deleted) during `init`, before the
+callback returns. If the app's handler throws or the page dies mid-handling, the record is gone. A
+hardening would defer deletion until the record is acknowledged — either an explicit ack API, or a
+"delivered" marker cleared on the next clean `init`. Edge-case robustness, not a v1 blocker.
 
 ## Reporting API corroboration (the former "Phase 7")
 

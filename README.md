@@ -96,6 +96,8 @@ marker + detectors). Idempotent. Options (all optional):
 | `heartbeatMs`          | `2000`   | Heartbeat cadence (ms).                                                |
 | `breadcrumbLimit`      | `100`    | Ring-buffer capacity (oldest dropped when full).                       |
 | `snapshotMaxBytes`     | `32768`  | JSON byte cap for snapshots; oversized/cyclic snapshots are rejected.  |
+| `retentionMs`          | `7 days` | Orphaned records older than this are swept on `init`.                  |
+| `namespace`            | —        | Isolate co-hosted apps on one origin: keys become `crashbox:<ns>:…`.   |
 | `debug`                | `false`  | Attach a `window.__crashbox` debug handle (see below).                 |
 | `onCrashRecovered`     | —        | `(record) => void` — fired once on load if the prior session crashed.  |
 | `onMemoryPressure`     | —        | `() => void` — WASM linear-memory growth crossed a pressure threshold. |
@@ -193,10 +195,11 @@ log is in [`docs/research/`](./docs/research/).
 - **`corroborated` is always `false` in v1.** The Reporting API `crash` report that could confirm a
   reason is Chromium-only and server-bound (a crashed page can't read it in JS), so ingesting it is
   deferred — see [`docs/FUTURE_WORK.md`](./docs/FUTURE_WORK.md). The heuristic stands on its own.
-- **Known limitations (v1):** multi-tab keying on a shared origin is not yet namespaced (concurrent
-  tabs can interfere with recovery); `onCrashRecovered` is fire-once; pure module-internal
-  `memory.grow` / engine-internal GPU growth bypass the JS hooks and aren't tracked. Tracked for
-  follow-up.
+- **Known limitations (v1):** co-hosted apps on one origin should pass distinct `namespace`s so
+  they don't share keys; **multiple tabs of the _same_ app** still share keys and can interfere
+  with each other's recovery; `onCrashRecovered` is fire-once; pure module-internal `memory.grow` /
+  engine-internal GPU growth bypass the JS hooks and aren't tracked. See
+  [`docs/FUTURE_WORK.md`](./docs/FUTURE_WORK.md).
 
 ## Browser support
 
