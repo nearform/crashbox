@@ -1,14 +1,14 @@
 # `crashbox`
 
 Local-first crash black box for the browser: survives hard tab kills (WebGPU,
-WASM, in-browser LLM OOM) and surfaces the recovered state on next load.
+WASM, in-browser OOM) and surfaces the recovered state on next load.
 
-When a browser tab dies hard — a WebGPU device/process kill, a WASM or in-browser-LLM
+When a browser tab dies hard — a WebGPU device/process kill, a WASM or in-browser
 out-of-memory, an unresponsive-tab kill — **no JavaScript runs at the moment of death.** JS error
 monitors (Sentry, Bugsnag) catch exceptions and unhandled rejections, but a hard tab kill fires no
 event for them to catch. The one browser-native crash report — the Reporting API's `crash` report —
 is Chromium-only, delivered to a **server** endpoint, and can't be read in JS at all (the page has
-already crashed). None of that helps on the primary target, **iOS Safari**, where WebGPU/WASM/LLM
+already crashed). None of that helps on the primary target, **iOS Safari**, where WebGPU/WASM
 workloads can take down the whole tab.
 
 crashbox takes the only approach that works when you can't run code during the crash:

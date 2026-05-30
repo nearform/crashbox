@@ -1,6 +1,6 @@
 <!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
 
-This is a JavaScript library project for a local-first browser crash "black box" that survives hard tab kills (WebGPU, WASM, in-browser LLM OOM) and surfaces the recovered state on next load (types via JSDoc annotations, validated by `tsc`). Prioritize robust persistence/recovery logic and a clean, configurable API.
+This is a JavaScript library project for a local-first browser crash "black box" that survives hard tab kills (WebGPU, WASM, in-browser OOM) and surfaces the recovered state on next load (types via JSDoc annotations, validated by `tsc`). Prioritize robust persistence/recovery logic and a clean, configurable API.
 
 ## Demo
 

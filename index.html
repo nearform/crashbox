@@ -530,25 +530,6 @@ ${recovered.breadcrumbs
                 />
               </div>
             </div>
-
-            <div className="demo-section">
-              <h2>iOS Safari manual cases (no button)</h2>
-              <ul>
-                <li>
-                  <strong>Tab discard:</strong> background this tab, open many
-                  others to force iOS to discard it, then return. Must produce
-                  ${" "}<strong>no</strong> crash record (the discard-vs-crash
-                  guard).
-                </li>
-                <li>
-                  <strong>In-browser LLM OOM (flagship):</strong> load a
-                  quantized model deliberately too large for the device (ideally
-                  from a home-screen PWA, where memory limits are tighter). The
-                  tab dies with no event → recovers as <code>oom</code> /
-                  ${" "}<code>hard-kill</code> on the next load.
-                </li>
-              </ul>
-            </div>
           </div>
         `;
       };
