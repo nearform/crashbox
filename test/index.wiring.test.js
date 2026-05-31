@@ -248,6 +248,86 @@ test("retention sweep keeps fresh records", () => {
   assert.ok(localStorage.getItem("crashbox:record:fresh"));
 });
 
+// --- live warnings buffer (getStatus().warnings) --------------------------
+
+test("getStatus().warnings is an empty array on fresh init", () => {
+  crashbox.init();
+  assert.deepEqual(crashbox.getStatus()?.warnings, []);
+});
+
+test("getStatus().warnings records memory-pressure events", () => {
+  // Hook the wasm detector with a real WebAssembly.Memory to fire onMemoryPressure.
+  crashbox.init({ detectors: ["wasm"] });
+  assert.ok(crashbox.getActiveOptions());
+
+  const PAGE = 65536;
+  const MB = 1048576;
+  const pages = (/** @type {number} */ mb) => Math.ceil((mb * MB) / PAGE);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(512) });
+  mem.grow(pages(300)); // ≥ burst threshold → fires onMemoryPressure
+
+  const w = crashbox.getStatus()?.warnings ?? [];
+  assert.ok(
+    w.some((x) => x.kind === "memory-pressure"),
+    `expected memory-pressure in warnings, got ${JSON.stringify(w)}`,
+  );
+  assert.ok(typeof w[0].t === "number", "warning has a timestamp");
+});
+
+test("getStatus().warnings is reset on each init (new session, fresh buffer)", () => {
+  crashbox.init({ detectors: ["wasm"] });
+  const PAGE = 65536;
+  const MB = 1048576;
+  const pages = (/** @type {number} */ mb) => Math.ceil((mb * MB) / PAGE);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(512) });
+  mem.grow(pages(300));
+  assert.ok((crashbox.getStatus()?.warnings ?? []).length >= 1);
+
+  crashbox.init({ detectors: ["wasm"] });
+  assert.deepEqual(crashbox.getStatus()?.warnings, []);
+});
+
+test("user-supplied onMemoryPressure still fires alongside the warnings buffer", () => {
+  let userFired = 0;
+  crashbox.init({
+    detectors: ["wasm"],
+    onMemoryPressure: () => {
+      userFired += 1;
+    },
+  });
+  const PAGE = 65536;
+  const MB = 1048576;
+  const pages = (/** @type {number} */ mb) => Math.ceil((mb * MB) / PAGE);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(512) });
+  mem.grow(pages(300));
+  assert.ok(userFired >= 1, "user's onMemoryPressure must still fire");
+  assert.ok(
+    (crashbox.getStatus()?.warnings ?? []).some(
+      (w) => w.kind === "memory-pressure",
+    ),
+    "and the warnings buffer is populated",
+  );
+});
+
+test("a throwing user onMemoryPressure does not break the warning record", () => {
+  crashbox.init({
+    detectors: ["wasm"],
+    onMemoryPressure: () => {
+      throw new Error("user handler boom");
+    },
+  });
+  const PAGE = 65536;
+  const MB = 1048576;
+  const pages = (/** @type {number} */ mb) => Math.ceil((mb * MB) / PAGE);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(512) });
+  assert.doesNotThrow(() => mem.grow(pages(300)));
+  assert.ok(
+    (crashbox.getStatus()?.warnings ?? []).some(
+      (w) => w.kind === "memory-pressure",
+    ),
+  );
+});
+
 test("retentionMs sweeps within the active namespace only", () => {
   // A stale orphan under namespace "a" should not be touched by an init in namespace "b".
   localStorage.setItem(
