@@ -11,6 +11,8 @@
 //  - wasm: track WebAssembly.Memory growth — the only memory-pressure signal on iOS (no
 //        performance.memory / measureUserAgentSpecificMemory) → onMemoryPressure.
 
+import { getWindow, unref } from "./env.js";
+
 /**
  * @typedef {Object} DetectorContext
  * @property {(msg: string, data?: Record<string, unknown>) => void} breadcrumb
@@ -40,20 +42,6 @@ const GPU_BURST_BYTES = 256 * 1048576;
 const WASM_GROWTH_MS = 2000;
 const WASM_FLOOR_BYTES = 64 * 1048576;
 const WASM_BURST_BYTES = 256 * 1048576;
-
-/** @returns {Window | null} */
-const getWindow = () => {
-  try {
-    return typeof window !== "undefined" ? window : null;
-  } catch {
-    return null;
-  }
-};
-
-/** Don't let a watchdog/timer keep a Node process alive (no-op in the browser). @param {unknown} id */
-const unref = (id) => {
-  /** @type {any} */ (id)?.unref?.();
-};
 
 /**
  * Lateness of a watchdog tick — how long the main thread was blocked beyond the interval.

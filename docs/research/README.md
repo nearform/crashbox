@@ -1,6 +1,6 @@
 # crashbox research log
 
-Empirical investigations from [SPEC §8](../SPEC.md#8-research-directions-for-claude-code-open-questions-to-investigate).
+Empirical investigations from [SPEC §8](../work/SPEC.md#8-research-directions-for-claude-code-open-questions-to-investigate).
 Much of this is browser-version-specific and undocumented, so each item is validated with a
 throwaway repro page (under [`spikes/`](./spikes/)) rather than assumed. Findings docs record the
 date, environment (browser + version + device), method, and the decision the result drives.

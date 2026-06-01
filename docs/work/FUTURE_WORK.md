@@ -68,8 +68,8 @@ methods. A committed OOM driven entirely by internal growth, with no JS-side sig
 
 **Fix-forward:** keep references to created/exported memories and poll their `buffer.byteLength` on a
 throttled interval, feeding the same pressure thresholds. Edge case for v1 (most runtimes grow via
-JS), but the honest gap. See [research §3 follow-up](./research/03-webgpu-device-loss.md) and
-[research §6](./research/06-memory-pressure.md).
+JS), but the honest gap. See [research §3 follow-up](../research/03-webgpu-device-loss.md) and
+[research §6](../research/06-memory-pressure.md).
 
 ## IndexedDB richer store
 
@@ -98,5 +98,5 @@ Capturing a real `wasDiscarded:true` iOS discard remains the one unconfirmed lin
 no-false-positive guarantee (iOS 18.7 / 8 GB resisted it twice). It is **non-blocking** —
 `wasDiscarded` can only ever _suppress_ a crash, never create a false positive — and the everyday
 backgrounding false-positive cases are already device-confirmed. Canonical tracking stays in
-[SPEC §0](./SPEC.md#0-resolved-decisions--open-questions) / [research §2](./research/02-ios-discard-vs-crash.md);
+[SPEC §0](./SPEC.md#0-resolved-decisions--open-questions) / [research §2](../research/02-ios-discard-vs-crash.md);
 listed here so it's visible as deferred, not dropped.

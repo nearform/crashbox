@@ -22,8 +22,9 @@
  * @property {number} lastSeen             Epoch ms of the final heartbeat (est. time of death).
  * @property {Breadcrumb[]} breadcrumbs    Tail of the ring buffer.
  * @property {Record<string, unknown> | undefined} snapshot Last app-provided snapshot (JSON-safe).
- * @property {boolean} corroborated        True if a Reporting API crash report confirmed the reason.
  */
+// NOTE: a `corroborated` flag (Reporting API crash report confirming the reason) is deferred to a
+// future version — see docs/work/FUTURE_WORK.md.
 
 /**
  * App-provided state snapshot. Must be JSON-serializable: no cycles, functions, Maps, or typed

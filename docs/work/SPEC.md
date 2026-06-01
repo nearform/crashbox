@@ -61,7 +61,7 @@ These supersede anything below that contradicts them.
   unconfirmed link in the §9 no-false-positive guarantee. Remaining levers: native-app memory
   pressure, and the add-to-homescreen PWA path (tighter iOS limits). **Non-blocking — not gating
   launch** (see [FUTURE_WORK.md](./FUTURE_WORK.md)). See
-  [research §2](./research/02-ios-discard-vs-crash.md).
+  [research §2](../research/02-ios-discard-vs-crash.md).
 
 ---
 
