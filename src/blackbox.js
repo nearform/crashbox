@@ -5,8 +5,8 @@
 /** @typedef {import("./types.js").Snapshot} Snapshot */
 
 /**
- * Fixed-capacity breadcrumb ring buffer (research §2: allocation-light hot path — pre-sized
- * array, integer head, overwrite-in-place, no push/shift). Drops oldest when full.
+ * Fixed-capacity breadcrumb ring buffer. Allocation-light hot path — pre-sized array, integer
+ * head, overwrite-in-place, no push/shift. Drops oldest when full.
  */
 export class RingBuffer {
   /** @param {number} capacity */
@@ -57,9 +57,8 @@ export class RingBuffer {
 const encoder = new TextEncoder();
 
 /**
- * Serialize + size-cap a snapshot. JSON (research §8 #7: ~5x faster than structuredClone,
- * sub-50µs at KB scale, and the only thing the localStorage fallback can carry). Returns the
- * JSON string, or null if un-serializable (cycles throw) or over `maxBytes` — caller
+ * Serialize + size-cap a snapshot. JSON, since it's the only form localStorage can carry. Returns
+ * the JSON string, or null if un-serializable (cycles throw) or over `maxBytes` — caller
  * breadcrumbs the rejection rather than throwing into the app.
  * @param {Snapshot} state
  * @param {number} maxBytes

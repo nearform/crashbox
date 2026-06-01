@@ -1,6 +1,6 @@
 # crashbox — design map
 
-How the `src/` modules map to the research findings ([docs/research/](./research/)) and the
+How the `src/` modules map to the research findings ([docs/research/](../research/)) and the
 implementation phases. Lean v1 layout (~5 files); each module's header comment cites the finding that
 drives it.
 

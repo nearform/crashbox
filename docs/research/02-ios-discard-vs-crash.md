@@ -4,8 +4,8 @@
 > synthesized** on iOS 18.7 / Safari 26.3 (iPhone 15 Pro) — see [Synthesized discriminator](#synthesized-discriminator-ios-187--safari-263).
 > Open: capture an actual `wasDiscarded:true` discard (iOS resisted it twice — see
 > [Synthesized discriminator](#synthesized-discriminator-ios-187--safari-263); non-blocking).
-> Tracked in [SPEC §0](../SPEC.md#0-resolved-decisions--open-questions); non-blocking, not gating
-> launch — see [FUTURE_WORK.md](../FUTURE_WORK.md).
+> Tracked in [SPEC §0](../work/SPEC.md#0-resolved-decisions--open-questions); non-blocking, not gating
+> launch — see [FUTURE_WORK.md](../work/FUTURE_WORK.md).
 
 ## Question
 

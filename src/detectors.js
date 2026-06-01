@@ -1,16 +1,17 @@
-// Detectors — enrichment, not the crash catch (hard kills have no live event; the crash
-// itself is caught by inference on the next load). Each detector observes its source, drops
-// breadcrumbs, and fires early-warning callbacks. Enabled per `options.detectors` (default
-// ["js"]; webgpu/wasm opt-in). Kept in one file — inline-able since they share a tiny shape.
+// Detectors — enrichment, not the crash catch (hard kills have no live event; the crash itself is
+// caught by inference on the next load). Each detector observes its source, drops breadcrumbs, and
+// fires early-warning callbacks. Enabled per `options.detectors` (default ["js"]; webgpu/wasm
+// opt-in). Kept in one file — they share a tiny shape.
 //
-// Research-driven specifics:
-//  - js: onerror + onunhandledrejection. iOS Safari has NO PerformanceObserver 'longtask'
-//        (research §6) → hang detection uses a main-thread watchdog (setInterval drift).
-//  - webgpu: wrap GPUDevice. device.lost reason "destroyed" = intentional; a real GPU OOM
-//        hard-kills with NO device.lost, but emits GPUOutOfMemoryError (uncapturederror)
-//        seconds before → that fires onDeviceLossImminent (research §8 #3/#4).
-//  - wasm: track WebAssembly.Memory growth — the ONLY memory-pressure signal on iOS
-//        (research §6: no performance.memory / measureUserAgentSpecificMemory) → onMemoryPressure.
+//  - js: onerror + onunhandledrejection. iOS Safari has no PerformanceObserver 'longtask', so hang
+//        detection uses a main-thread watchdog (setInterval drift).
+//  - webgpu: wrap GPUDevice. device.lost reason "destroyed" = intentional; a real GPU OOM hard-kills
+//        with no device.lost, but emits GPUOutOfMemoryError (uncapturederror) seconds before → that
+//        fires onDeviceLossImminent.
+//  - wasm: track WebAssembly.Memory growth — the only memory-pressure signal on iOS (no
+//        performance.memory / measureUserAgentSpecificMemory) → onMemoryPressure.
+
+import { getWindow, unref } from "./env.js";
 
 /**
  * @typedef {Object} DetectorContext
@@ -31,7 +32,7 @@ const STALL_MS = 250;
 /**
  * WebGPU activity log: flush cadence, the committed-bytes floor per window that counts as real
  * memory pressure (filters out routine light GPU use), and the single-window burst size that
- * flushes early (so a sub-second commit flood still leaves a marker before a kill — research §3).
+ * flushes early (so a sub-second commit flood still leaves a marker before a kill).
  */
 const GPU_ACTIVITY_MS = 2000;
 const GPU_FLOOR_BYTES = 64 * 1048576;
@@ -41,20 +42,6 @@ const GPU_BURST_BYTES = 256 * 1048576;
 const WASM_GROWTH_MS = 2000;
 const WASM_FLOOR_BYTES = 64 * 1048576;
 const WASM_BURST_BYTES = 256 * 1048576;
-
-/** @returns {Window | null} */
-const getWindow = () => {
-  try {
-    return typeof window !== "undefined" ? window : null;
-  } catch {
-    return null;
-  }
-};
-
-/** Don't let a watchdog/timer keep a Node process alive (no-op in the browser). @param {unknown} id */
-const unref = (id) => {
-  /** @type {any} */ (id)?.unref?.();
-};
 
 /**
  * Lateness of a watchdog tick — how long the main thread was blocked beyond the interval.
@@ -68,10 +55,10 @@ export const stallDriftMs = (prevTs, nowTs, intervalMs) =>
   Math.max(0, nowTs - prevTs - intervalMs);
 
 /**
- * JS / general detector: uncaught errors, unhandled rejections, and a main-thread watchdog
- * (iOS Safari has no `PerformanceObserver('longtask')` — research §6 — so hang detection uses
- * `setInterval` drift). The error name is folded into the breadcrumb text so a `RangeError`
- * surfaces as an `"oom"` reason on the next load via `inference.REASON_SIGNALS`.
+ * JS / general detector: uncaught errors, unhandled rejections, and a main-thread watchdog (iOS
+ * Safari has no `PerformanceObserver('longtask')`, so hang detection uses `setInterval` drift). The
+ * error name is folded into the breadcrumb text so a `RangeError` surfaces as an `"oom"` reason on
+ * the next load via `inference.REASON_SIGNALS`.
  * @param {DetectorContext} ctx
  * @returns {Detector}
  */
@@ -138,15 +125,15 @@ const createJsDetector = (ctx) => {
 };
 
 /**
- * WebGPU detector (primary v1 target — research §3). Wraps a `GPUDevice` to:
+ * WebGPU detector. Wraps a `GPUDevice` to:
  *  - breadcrumb `device.lost`, distinguishing intentional `reason:"destroyed"` (NOT a crash) from
  *    unexpected loss (tagged `webgpu-device-lost`);
- *  - surface `uncapturederror` — a `GPUOutOfMemoryError` precedes a hard tab kill by seconds
- *    (research §8 #4), so it fires `onDeviceLossImminent` and drops a `webgpu-device-lost` marker
- *    for the next load's inference; a `GPUValidationError` (e.g. over-limit buffer) is enrichment;
+ *  - surface `uncapturederror` — a `GPUOutOfMemoryError` precedes a hard tab kill by seconds, so it
+ *    fires `onDeviceLossImminent` and drops a `webgpu-device-lost` marker for the next load's
+ *    inference; a `GPUValidationError` (e.g. over-limit buffer) is enrichment;
  *  - proactively flag a `createBuffer` request larger than `limits.maxBufferSize`.
  * A real GPU OOM takes the whole tab down with NO `device.lost`, so the crash itself is caught by
- * Layer-3 inference; this detector provides the early warning + the breadcrumb trail.
+ * next-load inference; this detector provides the early warning + the breadcrumb trail.
  * @param {DetectorContext} ctx
  * @returns {Detector}
  */
@@ -267,11 +254,11 @@ const createWebgpuDetector = (ctx) => {
       };
     }
 
-    // Rolling GPU-activity log (throttled). A committed OOM can hard-kill sub-second with NO
-    // uncapturederror (research §3 Phase 5 follow-up), so without this the trail carries no webgpu
-    // marker and the crash misclassifies as hard-kill. We breadcrumb only under real memory
-    // pressure — ≥ GPU_FLOOR_BYTES committed per window, or a ≥ GPU_BURST_BYTES burst — so routine
-    // light GPU use stays out of the trail and can't hijack an unrelated crash's reason.
+    // Rolling GPU-activity log (throttled). A committed OOM can hard-kill sub-second with no
+    // uncapturederror, so without this the trail carries no webgpu marker and the crash
+    // misclassifies as hard-kill. We breadcrumb only under real memory pressure — ≥ GPU_FLOOR_BYTES
+    // committed per window, or a ≥ GPU_BURST_BYTES burst — so routine light GPU use stays out of the
+    // trail and can't hijack an unrelated crash's reason.
     let stopActivity = () => {};
     if (dev.queue && typeof dev.queue.writeBuffer === "function") {
       const queue = dev.queue;
@@ -374,15 +361,15 @@ const createWebgpuDetector = (ctx) => {
 };
 
 /**
- * WASM detector (research §6: `WebAssembly.Memory` growth is the ONLY memory-pressure signal on
- * iOS — no `performance.memory` / `measureUserAgentSpecificMemory`). Wraps
+ * WASM detector. `WebAssembly.Memory` growth is the only memory-pressure signal on iOS (no
+ * `performance.memory` / `measureUserAgentSpecificMemory`). Wraps
  * `WebAssembly.Memory.prototype.grow` to track total committed linear memory across instances;
  * under real pressure it fires `onMemoryPressure` and breadcrumbs `wasm memory: ~N MB committed`
  * (signal `memory-near-cap` → `"oom"`), so a WASM OOM that hard-kills the tab with no event
- * (research §2) recovers as `oom` from the trail. A failed grow (`RangeError`) is also
- * breadcrumbed and re-thrown. Throttled like the GPU activity log: a ≥`WASM_BURST_BYTES` jump
- * flushes immediately, else ≥`WASM_FLOOR_BYTES` per window. (JS-initiated grows — incl.
- * emscripten's `_emscripten_resize_heap` — are caught; pure module-internal `memory.grow` is not.)
+ * recovers as `oom` from the trail. A failed grow (`RangeError`) is also breadcrumbed and
+ * re-thrown. Throttled like the GPU activity log: a ≥`WASM_BURST_BYTES` jump flushes immediately,
+ * else ≥`WASM_FLOOR_BYTES` per window. (JS-initiated grows — incl. emscripten's
+ * `_emscripten_resize_heap` — are caught; pure module-internal `memory.grow` is not.)
  * @param {DetectorContext} ctx
  * @returns {Detector}
  */

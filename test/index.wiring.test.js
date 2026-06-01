@@ -65,7 +65,6 @@ test("a session with no clean shutdown is recovered as a crash", () => {
   // No pagehide fires → next load sees a live box with no clean marker.
   const got = initCapturing(); // session B recovers A
   assert.ok(got, "expected a crash record");
-  assert.equal(got?.corroborated, false);
 });
 
 test("a clean shutdown is NOT recovered as a crash", () => {

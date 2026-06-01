@@ -22,12 +22,13 @@
  * @property {number} lastSeen             Epoch ms of the final heartbeat (est. time of death).
  * @property {Breadcrumb[]} breadcrumbs    Tail of the ring buffer.
  * @property {Record<string, unknown> | undefined} snapshot Last app-provided snapshot (JSON-safe).
- * @property {boolean} corroborated        True if a Reporting API crash report confirmed the reason.
  */
+// NOTE: a `corroborated` flag (Reporting API crash report confirming the reason) is deferred to a
+// future version — see docs/work/FUTURE_WORK.md.
 
 /**
- * App-provided state snapshot. Must be JSON-serializable (research §8 #7): no cycles,
- * functions, Maps, or typed arrays — those are dropped/throw. Size-capped before persist.
+ * App-provided state snapshot. Must be JSON-serializable: no cycles, functions, Maps, or typed
+ * arrays — those are dropped/throw. Size-capped before persist.
  * @typedef {Record<string, unknown>} Snapshot
  */
 
@@ -70,8 +71,8 @@
  */
 
 /**
- * Signals captured at load that distinguish a crash from a discard / clean exit
- * (research §8 #2). All optional — availability varies by browser.
+ * Signals captured at load that distinguish a crash from a discard / clean exit.
+ * All optional — availability varies by browser.
  * @typedef {Object} LoadSignals
  * @property {boolean} wasDiscarded            `document.wasDiscarded` — iOS tab discard.
  * @property {string} [navigationType]         "navigate" | "reload" | "back_forward".

@@ -1,14 +1,23 @@
-// crashbox public API (SPEC §5) + browser wiring (lean v1 — localStorage only, no
-// ports/adapters/IDB). The spine (research §2 / SPEC §2): persist a tiny black box on a
-// throttled cadence + a heartbeat, write a clean-shutdown marker on graceful exit, and on the
-// next load decide "snapshot present + no clean-shutdown marker = the previous session crashed"
-// via the pure helpers in ./blackbox.js + ./inference.js. Detectors (./detectors.js) are wired
-// in Phase 3+. All browser access is guarded so importing/`init`-ing in Node or SSR is a safe
-// no-op (degrades to in-memory, no persistence/recover) rather than throwing.
+// crashbox public API + browser wiring (localStorage-only, no ports/adapters/IDB). The spine:
+// persist a tiny black box on a throttled cadence + a heartbeat, write a clean-shutdown marker on
+// graceful exit, and on the next load decide "snapshot present + no clean-shutdown marker = the
+// previous session crashed" via the pure helpers in ./blackbox.js + ./inference.js. Detectors
+// (./detectors.js) enrich the trail. All browser access is guarded so importing/`init`-ing in
+// Node or SSR is a safe no-op (degrades to in-memory, no persistence/recover) rather than throwing.
 
 import { RingBuffer, serializeSnapshot, parseSnapshot } from "./blackbox.js";
 import { classifyLoad, classifyReason } from "./inference.js";
 import { enableDetectors } from "./detectors.js";
+import { attachDebugHandle, detachDebugHandle } from "./debug.js";
+import {
+  getStorage,
+  getWindow,
+  getWasDiscarded,
+  getNavType,
+  makeSessionId,
+  jsonSafe,
+  unref,
+} from "./env.js";
 
 /** @typedef {import("./types.js").CrashboxOptions} CrashboxOptions */
 /** @typedef {import("./types.js").CrashRecord} CrashRecord */
@@ -28,10 +37,10 @@ import { enableDetectors } from "./detectors.js";
  */
 
 /**
- * Default options. Values chosen from the research spikes:
- * - `heartbeatMs` 2000 — SPEC default cadence.
- * - `breadcrumbLimit` 100 — SPEC default; trivially within the ~38 GB iOS quota (research §6/#9).
- * - `snapshotMaxBytes` 32768 — JSON snapshot cap; sub-50µs to serialize at this size (research §8 #7).
+ * Default options:
+ * - `heartbeatMs` 2000 — persist cadence.
+ * - `breadcrumbLimit` 100 — ring-buffer capacity.
+ * - `snapshotMaxBytes` 32768 — JSON snapshot byte cap.
  * - `detectors` ["js"] — JS detector default-on; webgpu/wasm are opt-in.
  * - `retentionMs` 7 days — orphaned records (e.g. from a tab that never reopened) older than this
  *   are swept on init. `namespace` has no default — unset means the bare `crashbox:` prefix.
@@ -48,7 +57,7 @@ export const DEFAULTS = {
 /**
  * localStorage key prefix. Bare `crashbox` by default; `crashbox:<namespace>` when
  * `options.namespace` is set, so two apps sharing one origin don't collide (origin-shared
- * localStorage). Set in `init`. (Same-app multi-tab keying is deferred — see docs/FUTURE_WORK.md.)
+ * localStorage). Set in `init`.
  */
 const DEFAULT_PREFIX = "crashbox";
 let keyPrefix = DEFAULT_PREFIX;
@@ -87,83 +96,9 @@ const pushWarning = (/** @type {Warning} */ w) => {
   }
 };
 
-// --- guarded environment access (so init is safe in Node/SSR) --------------
-
-/** @returns {Storage | null} */
-const getStorage = () => {
-  try {
-    return typeof localStorage !== "undefined" ? localStorage : null;
-  } catch {
-    return null; // access can throw under some privacy modes
-  }
-};
-
-/** @returns {Window | null} */
-const getWindow = () => {
-  try {
-    return typeof window !== "undefined" ? window : null;
-  } catch {
-    return null;
-  }
-};
-
-const getWasDiscarded = () => {
-  try {
-    // `document.wasDiscarded` is experimental (iOS tab-discard flag) and absent from lib.dom.
-    return (
-      typeof document !== "undefined" &&
-      /** @type {any} */ (document).wasDiscarded === true
-    );
-  } catch {
-    return false;
-  }
-};
-
-/** @returns {string | undefined} */
-const getNavType = () => {
-  try {
-    const entries =
-      typeof performance !== "undefined" && performance.getEntriesByType
-        ? performance.getEntriesByType("navigation")
-        : [];
-    const nav = /** @type {PerformanceNavigationTiming | undefined} */ (
-      entries[0]
-    );
-    return nav ? nav.type : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const makeSessionId = () => {
-  try {
-    if (typeof crypto !== "undefined" && crypto.randomUUID) {
-      return crypto.randomUUID();
-    }
-  } catch {
-    // fall through to the non-crypto id
-  }
-  return `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
-
-/**
- * Return `data` if JSON-safe, else a marker — keeps the persisted record always serializable
- * so one poison breadcrumb can't permanently break the write path.
- * @param {Record<string, unknown>} data
- * @returns {Record<string, unknown>}
- */
-const jsonSafe = (data) => {
-  try {
-    JSON.stringify(data);
-    return data;
-  } catch {
-    return { "[unserializable]": true };
-  }
-};
-
 // --- persistence ------------------------------------------------------------
 
-/** Synchronously mirror the current recorder to localStorage (research §8 #1: survives OOM). */
+/** Synchronously mirror the current recorder to localStorage so the last write survives a hard kill. */
 const persist = () => {
   const storage = getStorage();
   if (!storage || !recorder) {
@@ -230,12 +165,13 @@ const startHeartbeat = () => {
     }
   }, active.heartbeatMs);
   // Don't keep a Node test process alive on the timer (no-op in the browser).
-  /** @type {any} */ (heartbeatId)?.unref?.();
+  unref(heartbeatId);
 };
 
 /**
- * `pagehide` with `persisted:false` is the reliable clean-exit signal (SPEC §3/§4; NOT
- * `beforeunload`/`unload`). `persisted:true` means bfcache (may return) → not a clean shutdown.
+ * `pagehide` with `persisted:false` is the reliable clean-exit signal (preferred over the
+ * unreliable `beforeunload`/`unload`). `persisted:true` means bfcache (may return) → not a clean
+ * shutdown. https://developer.mozilla.org/en-US/docs/Web/API/Window/pagehide_event
  * @param {PageTransitionEvent} e
  */
 const onPageHide = (e) => {
@@ -299,7 +235,7 @@ const buildSignals = (prev) => ({
 
 /**
  * Read the previous session, classify it, and return a CrashRecord iff it crashed. The previous
- * record is consumed (cleared) either way — fire-once delivery (SPEC §0 retention question).
+ * record is consumed (cleared) either way — fire-once delivery.
  * @returns {CrashRecord | null}
  */
 const recoverPrevious = () => {
@@ -334,7 +270,6 @@ const recoverPrevious = () => {
       lastSeen: prev.lastSeen,
       breadcrumbs,
       snapshot: prev.snapshot,
-      corroborated: false, // Reporting API corroboration deferred — see docs/FUTURE_WORK.md
     };
   }
 
@@ -379,97 +314,6 @@ const sweepStaleRecords = () => {
     }
   } catch {
     // best-effort sweep
-  }
-};
-
-// --- debug handle (opt-in via options.debug) --------------------------------
-
-/** Every `crashbox:*` key currently in localStorage. @returns {string[]} */
-const debugKeys = () => {
-  const storage = getStorage();
-  /** @type {string[]} */
-  const out = [];
-  if (storage) {
-    for (let i = 0; i < storage.length; i++) {
-      const k = storage.key(i);
-      if (k && k.startsWith(`${keyPrefix}:`)) {
-        out.push(k);
-      }
-    }
-  }
-  return out;
-};
-
-/**
- * Attach a `window.__crashbox` console handle: the public API plus storage introspection
- * (`dump`/`clear`) and `recovered()`. Only called when `options.debug` is set, and only where a
- * window exists — the SDK otherwise never touches the global namespace.
- */
-const attachDebugHandle = () => {
-  const win = getWindow();
-  if (!win) {
-    return;
-  }
-  // GLOBAL AUGMENTATION (not a method wrap): add a `__crashbox` property to the global `window`.
-  // Unlike the detector monkey-patches, this doesn't override an existing native API — it pollutes
-  // the global namespace with a new handle, and only ever when `options.debug` is set.
-  // https://developer.mozilla.org/en-US/docs/Web/API/Window
-  /** @type {any} */ (win).__crashbox = {
-    init,
-    teardown,
-    breadcrumb,
-    setSnapshot,
-    attachGPUDevice,
-    getActiveOptions,
-    getStatus,
-    /** The crash record recovered on this load, or null. */
-    recovered: () => lastRecovered,
-    /** Parsed contents of every `crashbox:*` localStorage key. */
-    dump: () => {
-      const storage = getStorage();
-      /** @type {Record<string, unknown>} */
-      const out = {};
-      if (storage) {
-        for (const k of debugKeys()) {
-          const raw = storage.getItem(k);
-          try {
-            out[k] = raw === null ? null : JSON.parse(raw);
-          } catch {
-            out[k] = raw;
-          }
-        }
-      }
-      return out;
-    },
-    /** Wipe crashbox's localStorage keys (reset between tests). Returns the keys removed. */
-    clear: () => {
-      const storage = getStorage();
-      const keys = debugKeys();
-      if (storage) {
-        keys.forEach((k) => storage.removeItem(k));
-      }
-      return keys;
-    },
-  };
-  // A single line so a dev knows the handle is live (debug-mode only — opt-in).
-  try {
-    console.info(
-      "crashbox: debug handle at window.__crashbox (.dump/.status via getStatus/.recovered/.clear)",
-    );
-  } catch {
-    // no console — fine
-  }
-};
-
-/** Remove the `window.__crashbox` global augmentation added by `attachDebugHandle` (teardown). */
-const detachDebugHandle = () => {
-  const win = getWindow();
-  if (win && /** @type {any} */ (win).__crashbox) {
-    try {
-      delete (/** @type {any} */ (win).__crashbox);
-    } catch {
-      /** @type {any} */ (win).__crashbox = undefined; // non-configurable — null it out instead
-    }
   }
 };
 
@@ -570,7 +414,19 @@ export const init = (options = {}) => {
 
   // 5. Opt-in debug handle (never touches window unless asked).
   if (active.debug) {
-    attachDebugHandle();
+    attachDebugHandle({
+      api: {
+        init,
+        teardown,
+        breadcrumb,
+        setSnapshot,
+        attachGPUDevice,
+        getActiveOptions,
+        getStatus,
+      },
+      getKeyPrefix: () => keyPrefix,
+      getRecovered: () => lastRecovered,
+    });
   }
 };
 
