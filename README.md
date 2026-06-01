@@ -4,12 +4,12 @@ Local-first crash black box for the browser: survives hard tab kills (WebGPU,
 WASM, in-browser OOM) and surfaces the recovered state on next load.
 
 When a browser tab dies hard — a WebGPU device/process kill, a WASM or in-browser
-out-of-memory, an unresponsive-tab kill — **no JavaScript runs at the moment of death.** JS error
-monitors (Sentry, Bugsnag) catch exceptions and unhandled rejections, but a hard tab kill fires no
-event for them to catch. The one browser-native crash report — the Reporting API's `crash` report —
-is Chromium-only, delivered to a **server** endpoint, and can't be read in JS at all (the page has
-already crashed). None of that helps on the primary target, **iOS Safari**, where WebGPU/WASM
-workloads can take down the whole tab.
+out-of-memory, an unresponsive-tab kill — no JavaScript runs at the moment of death.
+This makes information recovery about the crash difficult. While there are some
+browser-native crash reports (e.g. Chrome Reporting API `crash` report), this library
+aims to work in any browser and application environment (from desktop to mobile).
+And calling out a primary motivation, **iOS Safari**, is particularly challenging
+where WebGPU/WASM workloads can take down the whole tab.
 
 crashbox takes the only approach that works when you can't run code during the crash:
 
@@ -22,14 +22,10 @@ crashbox takes the only approach that works when you can't run code during the c
 - **iOS-first.** Validated on real iOS 18.7 / Safari 26.3 hardware.
 - **Allocation-light.** The instrumentation must not cause the crash it's trying to catch.
 
-> **v1 scope:** localStorage-backed, 100% local (no backend). Detectors for `js`, `webgpu`, and
-> `wasm` are implemented and device-validated. Deferred items (Reporting API corroboration, etc.)
-> are in [`docs/work/FUTURE_WORK.md`](./docs/work/FUTURE_WORK.md).
-
 ## Install
 
 ```sh
-npm install crashbox
+$ npm install crashbox
 ```
 
 ## Quick start
@@ -126,7 +122,7 @@ A few things to know up front (the full list, with device-tested detail, is in
 [docs/API.md](./docs/API.md#platform-notes--caveats)):
 
 - **Hard kills are inferred after the fact, not caught live** — you get the record on the _next_ load.
-- **The reason is a heuristic, not confirmed** (Reporting API corroboration is deferred).
+- **The reason is a heuristic, not confirmed**
 - **Multiple tabs of the _same_ app share keys** and can interfere with each other's recovery; give
   co-hosted apps on one origin distinct `namespace`s.
 
