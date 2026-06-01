@@ -187,6 +187,57 @@ test("init({ debug: true }) attaches window.__crashbox with introspection helper
   assert.deepEqual(handle.dump(), {});
 });
 
+// --- teardown (full unload) -----------------------------------------------
+
+test("teardown marks a clean shutdown → the session is NOT recovered as a crash", () => {
+  crashbox.init();
+  crashbox.breadcrumb("work");
+  crashbox.teardown();
+  const got = initCapturing();
+  assert.equal(
+    got,
+    null,
+    "a torn-down session is a graceful exit, not a crash",
+  );
+});
+
+test("teardown reinstates a patched native (WebAssembly.Memory.prototype.grow)", () => {
+  const original = WebAssembly.Memory.prototype.grow;
+  crashbox.init({ detectors: ["wasm"] });
+  assert.notEqual(
+    WebAssembly.Memory.prototype.grow,
+    original,
+    "the wasm detector should have patched grow",
+  );
+  crashbox.teardown();
+  assert.equal(
+    WebAssembly.Memory.prototype.grow,
+    original,
+    "teardown should restore the original grow",
+  );
+});
+
+test("teardown removes the window.__crashbox debug handle", () => {
+  crashbox.init({ debug: true });
+  assert.ok(/** @type {any} */ (window).__crashbox, "handle attached by debug");
+  crashbox.teardown();
+  assert.equal(/** @type {any} */ (window).__crashbox, undefined);
+});
+
+test("teardown is safe before init and is idempotent", () => {
+  crashbox.teardown(); // before any init
+  crashbox.init();
+  assert.doesNotThrow(() => {
+    crashbox.teardown();
+    crashbox.teardown();
+  });
+  assert.equal(
+    crashbox.getActiveOptions(),
+    null,
+    "active options reset to pre-init after teardown",
+  );
+});
+
 // --- namespace isolation (co-hosted apps on one origin) -------------------
 
 test("two namespaces on one origin don't collide", () => {

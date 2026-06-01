@@ -118,6 +118,17 @@ breadcrumbed rather than thrown.
 
 Register a `GPUDevice` so the `webgpu` detector can wrap it. No-op unless `"webgpu"` is enabled.
 
+### `teardown()`
+
+Fully unload crashbox — the inverse of `init`. **Reinstates every monkey-patched native method**
+(`GPUDevice.createBuffer`, `GPUQueue.writeBuffer`, `GPUQueue.submit`,
+`WebAssembly.Memory.prototype.grow`), removes the `error` / `unhandledrejection` /
+`uncapturederror` / `pagehide` listeners, clears the heartbeat and detector timers, and deletes the
+`window.__crashbox` debug handle — leaving the page as if crashbox had never loaded. It first marks
+the current session as a clean shutdown (teardown is an intentional, graceful exit, like
+`pagehide`), so the next load does **not** report it as a crash. Safe to call before `init` or more
+than once. See [What this library patches](#what-this-library-patches).
+
 ### `getStatus()` / `getActiveOptions()`
 
 Introspection. `getStatus()` → `{ sessionId, lastSeen, breadcrumbCount } | null`;
@@ -167,7 +178,8 @@ itself is always caught by next-load inference, not by a live event.
 
 The detectors enrich the crash trail by **monkey-patching native methods in place** — they
 replace a method with a wrapper that forwards to the saved original. Every wrap is reverted when
-the detector is stopped (on re-`init` or teardown), restoring the native method:
+the detector is stopped (on re-`init`), and [`teardown()`](#teardown) reinstates **all** of them at
+once — restoring the native methods so the page is left as if crashbox never loaded:
 
 | Native API                                                                                                                                      | Detector | Why we patch it                                                                      |
 | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------ |
@@ -196,6 +208,7 @@ Two things that are **not** monkey-patches:
 - `__crashbox.recovered()` — the crash record recovered on this load (or `null`)
 - `__crashbox.getStatus()` — the live session
 - `__crashbox.clear()` — wipe crashbox's storage (reset between tests)
+- `__crashbox.teardown()` — fully unload crashbox (also removes this handle)
 
 The SDK never touches `window` unless `debug` is set.
 

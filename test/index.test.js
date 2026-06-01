@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   init,
+  teardown,
   breadcrumb,
   setSnapshot,
   attachGPUDevice,
@@ -17,6 +18,7 @@ test("public API is callable and exported", () => {
   assert.equal(typeof breadcrumb, "function");
   assert.equal(typeof setSnapshot, "function");
   assert.equal(typeof attachGPUDevice, "function");
+  assert.equal(typeof teardown, "function");
 });
 
 test("getActiveOptions is null before init", () => {
