@@ -118,6 +118,17 @@ breadcrumbed rather than thrown.
 
 Register a `GPUDevice` so the `webgpu` detector can wrap it. No-op unless `"webgpu"` is enabled.
 
+### `teardown()`
+
+Fully unload crashbox — the inverse of `init`. **Reinstates every monkey-patched native method**
+(`GPUDevice.createBuffer`, `GPUQueue.writeBuffer`, `GPUQueue.submit`,
+`WebAssembly.Memory.prototype.grow`), removes the `error` / `unhandledrejection` /
+`uncapturederror` / `pagehide` listeners, clears the heartbeat and detector timers, and deletes the
+`window.__crashbox` debug handle — leaving the page as if crashbox had never loaded. It first marks
+the current session as a clean shutdown (teardown is an intentional, graceful exit, like
+`pagehide`), so the next load does **not** report it as a crash. Safe to call before `init` or more
+than once. See [What this library patches](#what-this-library-patches).
+
 ### `getStatus()` / `getActiveOptions()`
 
 Introspection. `getStatus()` → `{ sessionId, lastSeen, breadcrumbCount } | null`;
@@ -163,6 +174,32 @@ itself is always caught by next-load inference, not by a live event.
   pressure it fires `onMemoryPressure` and breadcrumbs, so a WASM OOM recovers as `oom`. Catches
   JS-initiated growth (including emscripten's `_emscripten_resize_heap`).
 
+## What this library patches
+
+The detectors enrich the crash trail by **monkey-patching native methods in place** — they
+replace a method with a wrapper that forwards to the saved original. Every wrap is reverted when
+the detector is stopped (on re-`init`), and [`teardown()`](#teardown) reinstates **all** of them at
+once — restoring the native methods so the page is left as if crashbox never loaded:
+
+| Native API                                                                                                                                      | Detector | Why we patch it                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------ |
+| [`GPUDevice.createBuffer`](https://developer.mozilla.org/en-US/docs/Web/API/GPUDevice/createBuffer)                                             | `webgpu` | Flag a buffer request larger than `limits.maxBufferSize` before it's allocated       |
+| [`GPUQueue.writeBuffer`](https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/writeBuffer)                                                 | `webgpu` | Tally committed GPU bytes for the throttled activity log                             |
+| [`GPUQueue.submit`](https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/submit)                                                           | `webgpu` | Count submits to annotate the activity breadcrumb                                    |
+| [`WebAssembly.Memory.prototype.grow`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Memory/grow) | `wasm`   | Track committed linear memory across instances (the only iOS memory-pressure signal) |
+
+The first three are **per-instance** patches on the `GPUDevice`/`GPUQueue` you pass to
+`attachGPUDevice`. The last is a **prototype** patch, so it affects every `WebAssembly.Memory` in
+the realm while the `wasm` detector is active — which is why it's reverted on teardown.
+
+Two things that are **not** monkey-patches:
+
+- [`window.__crashbox`](https://developer.mozilla.org/en-US/docs/Web/API/Window) is a global handle
+  _added_ only when `debug: true` (see [Debugging](#debugging)) — it augments the global namespace
+  rather than overriding a native API. The SDK never touches `window` unless `debug` is set.
+- The `error` / `unhandledrejection` / `uncapturederror` / `pagehide` listeners are ordinary
+  `addEventListener` registrations (and are removed on teardown), not patches.
+
 ## Debugging
 
 `init({ debug: true })` attaches `window.__crashbox` (handy in Safari devtools on a tethered phone):
@@ -171,6 +208,7 @@ itself is always caught by next-load inference, not by a live event.
 - `__crashbox.recovered()` — the crash record recovered on this load (or `null`)
 - `__crashbox.getStatus()` — the live session
 - `__crashbox.clear()` — wipe crashbox's storage (reset between tests)
+- `__crashbox.teardown()` — fully unload crashbox (also removes this handle)
 
 The SDK never touches `window` unless `debug` is set.
 

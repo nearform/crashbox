@@ -262,6 +262,25 @@ const attachLifecycle = () => {
   }
 };
 
+/** Remove the `pagehide` listener attached by `attachLifecycle` (teardown). */
+const detachLifecycle = () => {
+  if (!lifecycleAttached) {
+    return;
+  }
+  const win = getWindow();
+  if (win) {
+    try {
+      win.removeEventListener(
+        "pagehide",
+        /** @type {EventListener} */ (onPageHide),
+      );
+    } catch {
+      // best-effort detach
+    }
+  }
+  lifecycleAttached = false;
+};
+
 // --- recover-on-load --------------------------------------------------------
 
 /**
@@ -391,8 +410,13 @@ const attachDebugHandle = () => {
   if (!win) {
     return;
   }
+  // GLOBAL AUGMENTATION (not a method wrap): add a `__crashbox` property to the global `window`.
+  // Unlike the detector monkey-patches, this doesn't override an existing native API — it pollutes
+  // the global namespace with a new handle, and only ever when `options.debug` is set.
+  // https://developer.mozilla.org/en-US/docs/Web/API/Window
   /** @type {any} */ (win).__crashbox = {
     init,
+    teardown,
     breadcrumb,
     setSnapshot,
     attachGPUDevice,
@@ -434,6 +458,18 @@ const attachDebugHandle = () => {
     );
   } catch {
     // no console — fine
+  }
+};
+
+/** Remove the `window.__crashbox` global augmentation added by `attachDebugHandle` (teardown). */
+const detachDebugHandle = () => {
+  const win = getWindow();
+  if (win && /** @type {any} */ (win).__crashbox) {
+    try {
+      delete (/** @type {any} */ (win).__crashbox);
+    } catch {
+      /** @type {any} */ (win).__crashbox = undefined; // non-configurable — null it out instead
+    }
   }
 };
 
@@ -595,6 +631,39 @@ export const attachGPUDevice = (device) => {
       d.attachGPUDevice(device);
     }
   }
+};
+
+/**
+ * Fully unload crashbox, reinstating the original native objects/functions — the inverse of
+ * `init`. Restores every monkey-patched method (`GPUDevice.createBuffer`, `GPUQueue.writeBuffer`,
+ * `GPUQueue.submit`, `WebAssembly.Memory.prototype.grow`) via the detectors' own teardown, removes
+ * the `error`/`unhandledrejection`/`uncapturederror`/`pagehide` listeners, clears the heartbeat and
+ * detector timers, and deletes the `window.__crashbox` debug handle — leaving the page as if
+ * crashbox had never loaded. Marks the current session as a clean shutdown first (teardown is an
+ * intentional, graceful exit, like `pagehide`), so the next load does NOT report it as a crash.
+ * Safe to call before `init` or more than once (idempotent no-op).
+ * @returns {void}
+ */
+export const teardown = () => {
+  // 1. Graceful-exit marker: teardown is intentional, so mark the session clean (same as the
+  //    pagehide path) BEFORE dropping the listener — otherwise the next load misreads the still-
+  //    live box as a crash. Persist while keyPrefix still points at this session's keys.
+  if (recorder) {
+    recorder.cleanShutdown = true;
+    persist();
+  }
+  // 2. Stop our timers, then restore every monkey-patched native method and remove the detector
+  //    listeners (each detector's stop() reinstates the originals it wrapped).
+  stopHeartbeat();
+  stopDetectors();
+  // 3. Remove crashbox's own listener + global handle so nothing of ours stays attached to the page.
+  detachLifecycle();
+  detachDebugHandle();
+  // 4. Reset module state back to pre-init.
+  active = null;
+  recorder = null;
+  lastRecovered = null;
+  keyPrefix = DEFAULT_PREFIX;
 };
 
 /**
