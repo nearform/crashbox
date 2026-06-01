@@ -26,8 +26,8 @@
  */
 
 /**
- * App-provided state snapshot. Must be JSON-serializable (research §8 #7): no cycles,
- * functions, Maps, or typed arrays — those are dropped/throw. Size-capped before persist.
+ * App-provided state snapshot. Must be JSON-serializable: no cycles, functions, Maps, or typed
+ * arrays — those are dropped/throw. Size-capped before persist.
  * @typedef {Record<string, unknown>} Snapshot
  */
 
@@ -70,8 +70,8 @@
  */
 
 /**
- * Signals captured at load that distinguish a crash from a discard / clean exit
- * (research §8 #2). All optional — availability varies by browser.
+ * Signals captured at load that distinguish a crash from a discard / clean exit.
+ * All optional — availability varies by browser.
  * @typedef {Object} LoadSignals
  * @property {boolean} wasDiscarded            `document.wasDiscarded` — iOS tab discard.
  * @property {string} [navigationType]         "navigate" | "reload" | "back_forward".

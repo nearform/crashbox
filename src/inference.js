@@ -1,7 +1,6 @@
-// Crash inference — pure functions, the heart of the SDK. Directly unit-testable under
-// `node --test` (take plain data, no DI). Two steps run on the next load:
+// Crash inference — pure functions, the heart of the SDK. Two steps run on the next load:
 //
-//   classifyLoad(signals)  — discard-vs-crash guard (research §8 #2, iOS 18.7):
+//   classifyLoad(signals)  — discard-vs-crash guard:
 //     1. wasDiscarded === true       → "discard" (suppress; a real crash never sets this)
 //     2. cleanShutdown marker present → "clean"  (graceful exit)
 //     3. live session, neither above  → "crash"
@@ -13,14 +12,14 @@
 //     WASM RangeError / memory-near-cap       → "oom"
 //     nothing but a stale heartbeat           → "hard-kill"
 //     else                                    → "unknown"
-//   (Both GPU and WASM OOM hard-kill the tab with no live event — research §8 #1/#4 — so the
-//    reason comes from the breadcrumb tail, not a death event.)
+//   (Both GPU and WASM OOM hard-kill the tab with no live event, so the reason comes from the
+//    breadcrumb tail, not a death event.)
 
 /** @typedef {import("./types.js").Breadcrumb} Breadcrumb */
 /** @typedef {import("./types.js").CrashReason} CrashReason */
 
 /**
- * Discard-vs-crash guard. Precedence (research §8 #2, iOS 18.7):
+ * Discard-vs-crash guard. Precedence:
  *   0. no prior black box (`!hasLiveSession`) → "none"   (nothing to classify)
  *   1. `wasDiscarded === true`                → "discard" (iOS discard never set by a crash)
  *   2. `cleanShutdown` marker present         → "clean"   (graceful exit wrote the marker)
@@ -45,8 +44,8 @@ export const classifyLoad = (signals) => {
 
 /**
  * Breadcrumb-tail markers each crash reason keys off. Matched against a crumb's `msg`
- * (case-insensitive substring) or an explicit `data.signal` token, so detectors (Phase 3/5/6)
- * can flag a reason either way. Exported as the shared contract between detectors and inference.
+ * (case-insensitive substring) or an explicit `data.signal` token, so detectors can flag a reason
+ * either way. Exported as the shared contract between detectors and inference.
  * @type {Record<"webgpu-device-lost" | "oom", string[]>}
  */
 export const REASON_SIGNALS = {
@@ -76,8 +75,8 @@ const crumbMatches = (crumb, markers) => {
 
 /**
  * Infer *why* the previous session crashed — only meaningful when `classifyLoad === "crash"`.
- * Both GPU and WASM OOM hard-kill the tab with no live event (research §8 #1/#4), so the cause
- * comes from the breadcrumb tail, not a death event. Precedence:
+ * Both GPU and WASM OOM hard-kill the tab with no live event, so the cause comes from the
+ * breadcrumb tail, not a death event. Precedence:
  *   1. WebGPU device-loss / GPUOutOfMemoryError marker → "webgpu-device-lost"
  *   2. WASM RangeError / memory-near-cap marker         → "oom"
  *   3. no cause marker but a heartbeat trail exists      → "hard-kill" (knew it died, not why)

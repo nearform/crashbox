@@ -1,10 +1,9 @@
-// crashbox public API (SPEC §5) + browser wiring (lean v1 — localStorage only, no
-// ports/adapters/IDB). The spine (research §2 / SPEC §2): persist a tiny black box on a
-// throttled cadence + a heartbeat, write a clean-shutdown marker on graceful exit, and on the
-// next load decide "snapshot present + no clean-shutdown marker = the previous session crashed"
-// via the pure helpers in ./blackbox.js + ./inference.js. Detectors (./detectors.js) are wired
-// in Phase 3+. All browser access is guarded so importing/`init`-ing in Node or SSR is a safe
-// no-op (degrades to in-memory, no persistence/recover) rather than throwing.
+// crashbox public API + browser wiring (localStorage-only, no ports/adapters/IDB). The spine:
+// persist a tiny black box on a throttled cadence + a heartbeat, write a clean-shutdown marker on
+// graceful exit, and on the next load decide "snapshot present + no clean-shutdown marker = the
+// previous session crashed" via the pure helpers in ./blackbox.js + ./inference.js. Detectors
+// (./detectors.js) enrich the trail. All browser access is guarded so importing/`init`-ing in
+// Node or SSR is a safe no-op (degrades to in-memory, no persistence/recover) rather than throwing.
 
 import { RingBuffer, serializeSnapshot, parseSnapshot } from "./blackbox.js";
 import { classifyLoad, classifyReason } from "./inference.js";
@@ -28,10 +27,10 @@ import { enableDetectors } from "./detectors.js";
  */
 
 /**
- * Default options. Values chosen from the research spikes:
- * - `heartbeatMs` 2000 — SPEC default cadence.
- * - `breadcrumbLimit` 100 — SPEC default; trivially within the ~38 GB iOS quota (research §6/#9).
- * - `snapshotMaxBytes` 32768 — JSON snapshot cap; sub-50µs to serialize at this size (research §8 #7).
+ * Default options:
+ * - `heartbeatMs` 2000 — persist cadence.
+ * - `breadcrumbLimit` 100 — ring-buffer capacity.
+ * - `snapshotMaxBytes` 32768 — JSON snapshot byte cap.
  * - `detectors` ["js"] — JS detector default-on; webgpu/wasm are opt-in.
  * - `retentionMs` 7 days — orphaned records (e.g. from a tab that never reopened) older than this
  *   are swept on init. `namespace` has no default — unset means the bare `crashbox:` prefix.
@@ -48,7 +47,7 @@ export const DEFAULTS = {
 /**
  * localStorage key prefix. Bare `crashbox` by default; `crashbox:<namespace>` when
  * `options.namespace` is set, so two apps sharing one origin don't collide (origin-shared
- * localStorage). Set in `init`. (Same-app multi-tab keying is deferred — see docs/FUTURE_WORK.md.)
+ * localStorage). Set in `init`.
  */
 const DEFAULT_PREFIX = "crashbox";
 let keyPrefix = DEFAULT_PREFIX;
@@ -147,7 +146,7 @@ const jsonSafe = (data) => {
 
 // --- persistence ------------------------------------------------------------
 
-/** Synchronously mirror the current recorder to localStorage (research §8 #1: survives OOM). */
+/** Synchronously mirror the current recorder to localStorage so the last write survives a hard kill. */
 const persist = () => {
   const storage = getStorage();
   if (!storage || !recorder) {
@@ -218,8 +217,9 @@ const startHeartbeat = () => {
 };
 
 /**
- * `pagehide` with `persisted:false` is the reliable clean-exit signal (SPEC §3/§4; NOT
- * `beforeunload`/`unload`). `persisted:true` means bfcache (may return) → not a clean shutdown.
+ * `pagehide` with `persisted:false` is the reliable clean-exit signal (preferred over the
+ * unreliable `beforeunload`/`unload`). `persisted:true` means bfcache (may return) → not a clean
+ * shutdown. https://developer.mozilla.org/en-US/docs/Web/API/Window/pagehide_event
  * @param {PageTransitionEvent} e
  */
 const onPageHide = (e) => {
@@ -283,7 +283,7 @@ const buildSignals = (prev) => ({
 
 /**
  * Read the previous session, classify it, and return a CrashRecord iff it crashed. The previous
- * record is consumed (cleared) either way — fire-once delivery (SPEC §0 retention question).
+ * record is consumed (cleared) either way — fire-once delivery.
  * @returns {CrashRecord | null}
  */
 const recoverPrevious = () => {
@@ -318,7 +318,7 @@ const recoverPrevious = () => {
       lastSeen: prev.lastSeen,
       breadcrumbs,
       snapshot: prev.snapshot,
-      corroborated: false, // Reporting API corroboration deferred — see docs/FUTURE_WORK.md
+      corroborated: false,
     };
   }
 
