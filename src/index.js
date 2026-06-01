@@ -375,6 +375,10 @@ const attachDebugHandle = () => {
   if (!win) {
     return;
   }
+  // GLOBAL AUGMENTATION (not a method wrap): add a `__crashbox` property to the global `window`.
+  // Unlike the detector monkey-patches, this doesn't override an existing native API — it pollutes
+  // the global namespace with a new handle, and only ever when `options.debug` is set.
+  // https://developer.mozilla.org/en-US/docs/Web/API/Window
   /** @type {any} */ (win).__crashbox = {
     init,
     breadcrumb,

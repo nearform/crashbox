@@ -163,6 +163,31 @@ itself is always caught by next-load inference, not by a live event.
   pressure it fires `onMemoryPressure` and breadcrumbs, so a WASM OOM recovers as `oom`. Catches
   JS-initiated growth (including emscripten's `_emscripten_resize_heap`).
 
+## What this library patches
+
+The detectors enrich the crash trail by **monkey-patching native methods in place** — they
+replace a method with a wrapper that forwards to the saved original. Every wrap is reverted when
+the detector is stopped (on re-`init` or teardown), restoring the native method:
+
+| Native API                                                                                                                                      | Detector | Why we patch it                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------ |
+| [`GPUDevice.createBuffer`](https://developer.mozilla.org/en-US/docs/Web/API/GPUDevice/createBuffer)                                             | `webgpu` | Flag a buffer request larger than `limits.maxBufferSize` before it's allocated       |
+| [`GPUQueue.writeBuffer`](https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/writeBuffer)                                                 | `webgpu` | Tally committed GPU bytes for the throttled activity log                             |
+| [`GPUQueue.submit`](https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/submit)                                                           | `webgpu` | Count submits to annotate the activity breadcrumb                                    |
+| [`WebAssembly.Memory.prototype.grow`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Memory/grow) | `wasm`   | Track committed linear memory across instances (the only iOS memory-pressure signal) |
+
+The first three are **per-instance** patches on the `GPUDevice`/`GPUQueue` you pass to
+`attachGPUDevice`. The last is a **prototype** patch, so it affects every `WebAssembly.Memory` in
+the realm while the `wasm` detector is active — which is why it's reverted on teardown.
+
+Two things that are **not** monkey-patches:
+
+- [`window.__crashbox`](https://developer.mozilla.org/en-US/docs/Web/API/Window) is a global handle
+  _added_ only when `debug: true` (see [Debugging](#debugging)) — it augments the global namespace
+  rather than overriding a native API. The SDK never touches `window` unless `debug` is set.
+- The `error` / `unhandledrejection` / `uncapturederror` / `pagehide` listeners are ordinary
+  `addEventListener` registrations (and are removed on teardown), not patches.
+
 ## Debugging
 
 `init({ debug: true })` attaches `window.__crashbox` (handy in Safari devtools on a tethered phone):

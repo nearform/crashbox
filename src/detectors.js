@@ -255,6 +255,10 @@ const createWebgpuDetector = (ctx) => {
         }
         return original(descriptor);
       };
+      // MONKEY-PATCH: GPUDevice.createBuffer (per-instance) — replace with a wrapper that
+      // inspects the descriptor then forwards to the saved `original`. Reverted by
+      // `restoreCreateBuffer()` on teardown.
+      // https://developer.mozilla.org/en-US/docs/Web/API/GPUDevice/createBuffer
       dev.createBuffer = wrapped;
       restoreCreateBuffer = () => {
         if (dev.createBuffer === wrapped) {
@@ -303,6 +307,9 @@ const createWebgpuDetector = (ctx) => {
         }
         return originalWrite(...args);
       };
+      // MONKEY-PATCH: GPUQueue.writeBuffer (per-instance) — wrap to tally committed bytes,
+      // then forward to the saved `originalWrite`. Reverted by `stopActivity()` on teardown.
+      // https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/writeBuffer
       queue.writeBuffer = wrappedWrite;
 
       /** @type {Function | null} */
@@ -317,6 +324,9 @@ const createWebgpuDetector = (ctx) => {
           pendingSubmits += 1;
           return origSubmit(...args);
         };
+        // MONKEY-PATCH: GPUQueue.submit (per-instance) — wrap to count submits, then forward
+        // to the saved `origSubmit`. Reverted by `stopActivity()` on teardown.
+        // https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/submit
         queue.submit = wrappedSubmit;
       }
 
@@ -448,6 +458,11 @@ const createWasmDetector = (ctx) => {
     }
     return result;
   };
+  // MONKEY-PATCH: WebAssembly.Memory.prototype.grow — replace with a wrapper that forwards to
+  // the saved `originalGrow`, then tracks growth. NOTE: this is a PROTOTYPE patch, so it affects
+  // EVERY WebAssembly.Memory in the realm (not one instance) — which is why `stop()` must revert
+  // it back to `originalGrow` on teardown.
+  // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Memory/grow
   proto.grow = trackedGrow;
 
   const timer = setInterval(() => {
