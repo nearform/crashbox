@@ -577,7 +577,10 @@ export const getStatus = () =>
  * @returns {Promise<T>}
  */
 export const wrap = async (name, fn, makeData) => {
-  breadcrumb(`${name}:start`, makeData ? makeData() : undefined);
+  // Honor the lazy `makeData` contract: only invoke it when a breadcrumb can
+  // actually fire (i.e. after `init`). `breadcrumb` is a no-op before `init`,
+  // so calling `makeData()` then would run side effects/costs for nothing.
+  breadcrumb(`${name}:start`, recorder && makeData ? makeData() : undefined);
   const t0 = Date.now();
   try {
     const result = await fn();
