@@ -74,6 +74,9 @@ $ npx serve
       }
       .header {
         text-align: center;
+        /* Balance wrapped lines so centered text forms an even block, not a long
+           line over a short orphan. Applies to every centered element below. */
+        text-wrap: balance;
         margin-bottom: 40px;
         padding: 40px 20px;
         background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
@@ -222,7 +225,7 @@ $ npx serve
 
       const Badge = ({ kind }) => {
         const map = {
-          kill: ["hard kill → reload to see recovery", "#c0392b"],
+          kill: ["hard kill (iOS) · catchable (desktop)", "#c0392b"],
           catchable: ["catchable (tab survives)", "#2980b9"],
           manual: ["manual / best-effort", "#8e44ad"],
         };
@@ -248,11 +251,23 @@ $ npx serve
         </button>
       `;
 
+      // Inline JSON dump for the debug pane. `payload` null/empty renders an italic "nothing" line.
+      const isEmpty = (v) =>
+        v == null || (typeof v === "object" && Object.keys(v).length === 0);
+      const InlineView = ({ view }) =>
+        isEmpty(view.payload)
+          ? html`<p style=${{ color: "#777", fontStyle: "italic" }}>
+              No data for "${view.label}" — nothing to show.
+            </p>`
+          : html`<pre>${JSON.stringify(view.payload, null, 2)}</pre>`;
+
       const App = () => {
         const [counter, setCounter] = useState(0);
         const [status, setStatus] = useState(crashbox.getStatus());
         const [memMB, setMemMB] = useState(readMemoryMB());
         const [pressed, setPressed] = useState([]);
+        // null = nothing shown; { label, payload } once a debug button is clicked.
+        const [inlineView, setInlineView] = useState(null);
 
         // Continuously snapshot a counter+timestamp so every crash leaves a verifiable trail.
         useEffect(() => {
@@ -398,6 +413,10 @@ $ npx serve
                 Local-first crash black box for the browser. Trigger a crash,
                 let the tab die, reload, and confirm the recovered record below.
               </p>
+              <p style=${{ fontSize: "0.9em", color: "#718096" }}>
+                The red <em>kill</em> triggers only hard-kill memory-limited
+                devices (iOS); on desktop, most often tabs survive.
+              </p>
             </div>
 
             ${recovered
@@ -451,6 +470,49 @@ ${recovered.breadcrumbs
               <pre>${JSON.stringify(CAPABILITIES, null, 2)}</pre>
               <strong>recent actions</strong>
               <pre>${pressed.join("\n") || "(press a trigger)"}</pre>
+            </div>
+
+            <div className="demo-section">
+              <h2>Debug actions</h2>
+              <p>
+                Reads the live <code>window.__crashbox</code> handle (<code
+                  >debug: true</code
+                >): <code>dump()</code> parses every
+                <code>crashbox:*</code> localStorage key;
+                <code>recovered()</code>
+                returns this load's recovered record.
+              </p>
+              <div className="trigger-group">
+                <button
+                  className="pure-button trigger"
+                  onClick=${() =>
+                    setInlineView({
+                      label: "Full dump",
+                      payload: window.__crashbox?.dump() ?? null,
+                    })}
+                >
+                  Show dump
+                </button>
+                <button
+                  className="pure-button trigger"
+                  onClick=${() =>
+                    setInlineView({
+                      label: "Recovered crash",
+                      payload: window.__crashbox?.recovered() ?? null,
+                    })}
+                >
+                  Show recovered
+                </button>
+                ${inlineView !== null &&
+                html`<button
+                  className="pure-button trigger"
+                  onClick=${() => setInlineView(null)}
+                >
+                  Hide
+                </button>`}
+              </div>
+              ${inlineView !== null &&
+              html`<${InlineView} view=${inlineView} />`}
             </div>
 
             <div className="demo-section">
