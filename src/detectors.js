@@ -413,6 +413,7 @@ const createWasmDetector = (ctx) => {
   /** @this {any} @param {number} delta */
   const trackedGrow = function (delta) {
     let result;
+    /** @type {any} */
     let threw = null;
     try {
       result = originalGrow.call(this, delta);
@@ -421,7 +422,7 @@ const createWasmDetector = (ctx) => {
     }
     try {
       if (threw) {
-        const name = (threw && /** @type {any} */ (threw).name) || "error";
+        const name = (threw && threw.name) || "error";
         ctx.breadcrumb(`wasm memory.grow failed: ${name}`, {
           signal: "memory-near-cap",
         });

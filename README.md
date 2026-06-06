@@ -81,8 +81,11 @@ recover-on-load for you.
 
 ## API
 
-`init(options?)`, `breadcrumb(msg, data?)`, `setSnapshot(state)`, `attachGPUDevice(device)`, and
-`teardown()` (plus `getStatus()` / `getActiveOptions()` for introspection). Three detectors —
+`init(options?)`, `breadcrumb(msg, data?)`, `wrap(name, fn, makeData?)` (breadcrumb an async
+operation's start/ok/error), `setSnapshot(state)`, `attachGPUDevice(device)`, and `teardown()`
+(plus `clearRecovered()` to drop the recovered record once handled, and `getStatus()` /
+`getActiveOptions()` for introspection — `getStatus()` now also returns a `warnings` array of
+in-session memory-pressure / device-loss events). Three detectors —
 `js` (default), `webgpu`, `wasm` — enrich the breadcrumb trail; they are **enrichment only**, since
 the hard kill itself is always caught by next-load inference, never a live event. Shipped TypeScript
 types describe every option and the recovered `CrashRecord`.

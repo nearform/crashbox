@@ -74,6 +74,9 @@ $ npx serve
       }
       .header {
         text-align: center;
+        /* Balance wrapped lines so centered text forms an even block, not a long
+           line over a short orphan. Applies to every centered element below. */
+        text-wrap: balance;
         margin-bottom: 40px;
         padding: 40px 20px;
         background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
@@ -147,6 +150,33 @@ $ npx serve
           width: auto;
           max-width: 420px;
         }
+      }
+      /* Title + GitHub icon on one centered row. */
+      .title-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+      }
+      /* GitHub icon link in the header — circular badge that tints on hover. */
+      .github-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        background: #edf2f7;
+        border-radius: 50%;
+        font-size: 1.4em;
+        color: #4a5568;
+        text-decoration: none;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .github-link:hover {
+        background: #2d3748;
+        color: #ffffff;
       }
     </style>
     <title>crashbox Demo</title>
@@ -222,7 +252,7 @@ $ npx serve
 
       const Badge = ({ kind }) => {
         const map = {
-          kill: ["hard kill → reload to see recovery", "#c0392b"],
+          kill: ["hard kill (iOS) · catchable (desktop)", "#c0392b"],
           catchable: ["catchable (tab survives)", "#2980b9"],
           manual: ["manual / best-effort", "#8e44ad"],
         };
@@ -248,11 +278,23 @@ $ npx serve
         </button>
       `;
 
+      // Inline JSON dump for the debug pane. `payload` null/empty renders an italic "nothing" line.
+      const isEmpty = (v) =>
+        v == null || (typeof v === "object" && Object.keys(v).length === 0);
+      const InlineView = ({ view }) =>
+        isEmpty(view.payload)
+          ? html`<p style=${{ color: "#777", fontStyle: "italic" }}>
+              No data for "${view.label}" — nothing to show.
+            </p>`
+          : html`<pre>${JSON.stringify(view.payload, null, 2)}</pre>`;
+
       const App = () => {
         const [counter, setCounter] = useState(0);
         const [status, setStatus] = useState(crashbox.getStatus());
         const [memMB, setMemMB] = useState(readMemoryMB());
         const [pressed, setPressed] = useState([]);
+        // null = nothing shown; { label, payload } once a debug button is clicked.
+        const [inlineView, setInlineView] = useState(null);
 
         // Continuously snapshot a counter+timestamp so every crash leaves a verifiable trail.
         useEffect(() => {
@@ -320,8 +362,26 @@ $ npx serve
         };
         const jsHeapExhaustion = () => {
           note("trigger: JS heap exhaustion (may hard-kill the tab)");
+          // A bare `new ArrayBuffer` only grows VIRTUAL address space — the OS backs it
+          // with copy-on-write zero pages, so JSC throws a catchable RangeError before iOS
+          // feels real pressure (and the dropped buffer is GC'd). Touching every page forces
+          // a PHYSICAL commit (same as the WASM trigger), so resident memory actually climbs
+          // until iOS jetsam hard-kills the tab with no error. Yields via setTimeout so the
+          // snapshot heartbeat keeps ticking and the kill leaves a recoverable trail.
           const sink = [];
-          for (;;) sink.push(new ArrayBuffer(64 * 1048576));
+          const STEP = 64 * 1048576; // 64 MB per buffer
+          const grow = () => {
+            try {
+              const buf = new ArrayBuffer(STEP);
+              const view = new Uint8Array(buf);
+              for (let i = 0; i < view.length; i += 4096) view[i] = 1;
+              sink.push(buf);
+              setTimeout(grow, 0);
+            } catch (e) {
+              note(`JS alloc threw (caught, tab survived): ${e.message}`);
+            }
+          };
+          grow();
         };
         // The webgpu detector now wraps the device on attachGPUDevice — it breadcrumbs
         // device.lost / uncapturederror and the oversized-buffer warning automatically, so
@@ -393,10 +453,25 @@ $ npx serve
         return html`
           <div className="container">
             <div className="header">
-              <h1>crashbox</h1>
+              <div className="title-row">
+                <h1>crashbox</h1>
+                <a
+                  className="github-link"
+                  href="https://github.com/nearform/crashbox"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="crashbox on GitHub"
+                >
+                  <i className="ph ph-github-logo"></i>
+                </a>
+              </div>
               <p>
                 Local-first crash black box for the browser. Trigger a crash,
                 let the tab die, reload, and confirm the recovered record below.
+              </p>
+              <p style=${{ fontSize: "0.9em", color: "#718096" }}>
+                The red <em>kill</em> triggers only hard-kill memory-limited
+                devices (iOS); on desktop, most often tabs survive.
               </p>
             </div>
 
@@ -439,7 +514,7 @@ ${recovered.breadcrumbs
               <p>
                 <strong>sessionId:</strong>
                 ${" "}${status ? status.sessionId : "—"}<br />
-                <strong>snapshot counter:</strong> ${" "}${counter} ·
+                <strong>snapshot counter:</strong> ${" "}${counter}<br />
                 <strong>breadcrumbs:</strong>
                 ${" "}${status ? status.breadcrumbCount : 0}<br />
                 <strong>JS heap:</strong>
@@ -451,6 +526,49 @@ ${recovered.breadcrumbs
               <pre>${JSON.stringify(CAPABILITIES, null, 2)}</pre>
               <strong>recent actions</strong>
               <pre>${pressed.join("\n") || "(press a trigger)"}</pre>
+            </div>
+
+            <div className="demo-section">
+              <h2>Debug actions</h2>
+              <p>
+                Reads the live <code>window.__crashbox</code> handle (<code
+                  >debug: true</code
+                >): <code>dump()</code> parses every
+                <code>crashbox:*</code> localStorage key;
+                <code>recovered()</code>
+                returns this load's recovered record.
+              </p>
+              <div className="trigger-group">
+                <button
+                  className="pure-button trigger"
+                  onClick=${() =>
+                    setInlineView({
+                      label: "Full dump",
+                      payload: window.__crashbox?.dump() ?? null,
+                    })}
+                >
+                  Show dump
+                </button>
+                <button
+                  className="pure-button trigger"
+                  onClick=${() =>
+                    setInlineView({
+                      label: "Recovered crash",
+                      payload: window.__crashbox?.recovered() ?? null,
+                    })}
+                >
+                  Show recovered
+                </button>
+                ${inlineView !== null &&
+                html`<button
+                  className="pure-button trigger"
+                  onClick=${() => setInlineView(null)}
+                >
+                  Hide
+                </button>`}
+              </div>
+              ${inlineView !== null &&
+              html`<${InlineView} view=${inlineView} />`}
             </div>
 
             <div className="demo-section">

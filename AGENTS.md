@@ -39,7 +39,7 @@ When you need a package:
    unless the human explicitly decides otherwise.
 3. **Prefer zero-dep** — hand-roll small helpers (e.g. browser-globals lists, trivial test fakes)
    rather than pulling a package, and say so when a dep is avoidable.
-4. Test-only fakes (e.g. `fake-indexeddb`, `happy-dom`) are `devDependencies` imported **only from
+4. Test-only fakes (e.g. `happy-dom`) are `devDependencies` imported **only from
    `test/`**, never from `src/` (which must stay runtime-dep-free and browser-loadable).
 
 ## Version control — agents must NOT commit

@@ -61,7 +61,14 @@ export const DEFAULTS = {
  */
 const DEFAULT_PREFIX = "crashbox";
 let keyPrefix = DEFAULT_PREFIX;
-/** Points at the most recent session id, so the next load knows what to recover. */
+/**
+ * Points at the most recent session id, so the next load knows what to recover. MULTI-TAB LIMITATION:
+ * there is exactly one `current` pointer per namespace, and localStorage is shared across all tabs on
+ * the origin. So a second tab's `init()` repoints `current` at its own session and consumes whatever
+ * `current` referenced — meaning a first tab that later crashes won't be recovered (its record is
+ * orphaned, reclaimed only by the `retentionMs` sweep). Crashbox is single-tab by design; robust
+ * per-tab recovery would need tab-scoped pointers (e.g. via the BroadcastChannel/Web Locks API).
+ */
 const currentKey = () => `${keyPrefix}:current`;
 const recordKeyPrefix = () => `${keyPrefix}:record:`;
 /** @param {string} id */
@@ -79,6 +86,22 @@ let heartbeatId = null;
 /** @type {import("./detectors.js").Detector[]} */
 let detectorHandles = [];
 let lifecycleAttached = false;
+
+/**
+ * In-session warning ring buffer — every `onMemoryPressure` / `onDeviceLossImminent` call is
+ * mirrored here so a UI can list "warnings this session" without having to also subscribe to the
+ * callbacks. Reset on every `init`. Cap matches `breadcrumbLimit` semantics — newest-N kept.
+ * @typedef {{ t: number, kind: "memory-pressure" | "device-loss-imminent", info?: Record<string, unknown> }} Warning
+ */
+const WARNINGS_CAP = 50;
+/** @type {Warning[]} */
+let warnings = [];
+const pushWarning = (/** @type {Warning} */ w) => {
+  warnings.push(w);
+  if (warnings.length > WARNINGS_CAP) {
+    warnings.splice(0, warnings.length - WARNINGS_CAP);
+  }
+};
 
 // --- persistence ------------------------------------------------------------
 
@@ -317,6 +340,7 @@ export const init = (options = {}) => {
     : DEFAULT_PREFIX;
   stopHeartbeat();
   stopDetectors();
+  warnings = [];
 
   // 1. Recover the previous session before we overwrite the "current" pointer, then sweep
   //    orphaned records (from tabs that never reopened) past the retention window.
@@ -356,8 +380,41 @@ export const init = (options = {}) => {
   // 4. Detectors enrich the trail (js default-on; webgpu/wasm opt-in). They emit breadcrumbs
   //    via the public recorder, so a caught error/stall/OOM-pressure signal shows up in the
   //    next load's crash record and feeds classifyReason.
+  //    Warning callbacks are wrapped so every fire is also recorded in the live `warnings`
+  //    buffer (queryable via getStatus()), with the user's original callback invoked after.
+  //    `active` itself is left unmodified so getActiveOptions() returns what the user passed.
+  const userMemoryPressure = active.onMemoryPressure;
+  const userDeviceLossImminent = active.onDeviceLossImminent;
+  /** @type {ResolvedOptions} */
+  const detectorOptions = {
+    ...active,
+    onMemoryPressure: () => {
+      pushWarning({ t: Date.now(), kind: "memory-pressure" });
+      if (userMemoryPressure) {
+        try {
+          userMemoryPressure();
+        } catch {
+          // a throwing app callback must not break the detector
+        }
+      }
+    },
+    onDeviceLossImminent: (info) => {
+      pushWarning({
+        t: Date.now(),
+        kind: "device-loss-imminent",
+        info: info ? { ...info } : undefined,
+      });
+      if (userDeviceLossImminent) {
+        try {
+          userDeviceLossImminent(info);
+        } catch {
+          // a throwing app callback must not break the detector
+        }
+      }
+    },
+  };
   try {
-    detectorHandles = enableDetectors({ breadcrumb, options: active });
+    detectorHandles = enableDetectors({ breadcrumb, options: detectorOptions });
   } catch {
     detectorHandles = []; // a detector failing to attach must not break init
   }
@@ -371,6 +428,7 @@ export const init = (options = {}) => {
         breadcrumb,
         setSnapshot,
         attachGPUDevice,
+        clearRecovered,
         getActiveOptions,
         getStatus,
       },
@@ -473,6 +531,18 @@ export const teardown = () => {
 };
 
 /**
+ * Clear the crash record delivered on this load. `init` delivers a recovered crash once (via
+ * `onCrashRecovered`) and then keeps it on `lastRecovered` so the debug handle's `recovered()` can
+ * report it. Once the app has acknowledged/dismissed the crash it should call this so the debug
+ * handle stops reporting a stale record — keeping every consumer of "the crash this load" in sync.
+ * No-op if nothing was recovered.
+ * @returns {void}
+ */
+export const clearRecovered = () => {
+  lastRecovered = null;
+};
+
+/**
  * The active resolved options, or null before `init`. Exposed for tests/introspection.
  * @returns {ResolvedOptions | null}
  */
@@ -481,7 +551,9 @@ export const getActiveOptions = () => active;
 /**
  * Live status of the current session, or null before `init`. Introspection for the demo /
  * on-device debugging (lets a tester correlate which session id later shows up as a crash).
- * @returns {{ sessionId: string, lastSeen: number, breadcrumbCount: number } | null}
+ * `warnings` is the in-session ring buffer of `onMemoryPressure` / `onDeviceLossImminent` events
+ * — populated by the SDK even when the app didn't supply callbacks.
+ * @returns {{ sessionId: string, lastSeen: number, breadcrumbCount: number, warnings: Warning[] } | null}
  */
 export const getStatus = () =>
   recorder
@@ -489,5 +561,37 @@ export const getStatus = () =>
         sessionId: recorder.sessionId,
         lastSeen: recorder.lastSeen,
         breadcrumbCount: recorder.ring.size,
+        warnings: [...warnings],
       }
     : null;
+
+/**
+ * Wrap an async operation: breadcrumb `<name>:start`, then either `<name>:ok` (with duration)
+ * on success or `<name>:error` (with duration, error name, and truncated message) on throw.
+ * Re-throws errors so caller semantics are unchanged. No-op-safe before `init` (breadcrumb
+ * silently drops).
+ * @template T
+ * @param {string} name
+ * @param {() => Promise<T> | T} fn
+ * @param {() => Record<string, unknown>} [makeData] Lazy: only called if a breadcrumb fires.
+ * @returns {Promise<T>}
+ */
+export const wrap = async (name, fn, makeData) => {
+  // Honor the lazy `makeData` contract: only invoke it when a breadcrumb can
+  // actually fire (i.e. after `init`). `breadcrumb` is a no-op before `init`,
+  // so calling `makeData()` then would run side effects/costs for nothing.
+  breadcrumb(`${name}:start`, recorder && makeData ? makeData() : undefined);
+  const t0 = Date.now();
+  try {
+    const result = await fn();
+    breadcrumb(`${name}:ok`, { ms: Date.now() - t0 });
+    return result;
+  } catch (/** @type {any} */ err) {
+    breadcrumb(`${name}:error`, {
+      ms: Date.now() - t0,
+      name: err?.name,
+      message: String(err?.message ?? err).slice(0, 200),
+    });
+    throw err;
+  }
+};

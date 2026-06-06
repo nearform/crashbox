@@ -7,6 +7,7 @@ import {
   setSnapshot,
   attachGPUDevice,
   getActiveOptions,
+  wrap,
   DEFAULTS,
 } from "../src/index.js";
 
@@ -43,4 +44,38 @@ test("breadcrumb / setSnapshot / attachGPUDevice are safe no-ops in Phase 0", ()
   assert.doesNotThrow(() => breadcrumb("hello", { a: 1 }));
   assert.doesNotThrow(() => breadcrumb("no-data"));
   assert.doesNotThrow(() => setSnapshot({ counter: 1 }));
+});
+
+test("wrap: success path resolves and yields the inner value", async () => {
+  init();
+  const result = await wrap("work", async () => 42);
+  assert.equal(result, 42);
+});
+
+test("wrap: error path re-throws the original error", async () => {
+  init();
+  const boom = new Error("boom");
+  await assert.rejects(
+    () =>
+      wrap("work", async () => {
+        throw boom;
+      }),
+    /boom/,
+  );
+});
+
+test("wrap: makeData is only invoked once and lazily", async () => {
+  init();
+  let calls = 0;
+  const makeData = () => {
+    calls += 1;
+    return { call: calls };
+  };
+  await wrap("work", async () => 1, makeData);
+  assert.equal(calls, 1);
+});
+
+test("attachGPUDevice is exported and callable (no-op without webgpu detector)", () => {
+  init();
+  assert.doesNotThrow(() => attachGPUDevice(/** @type {any} */ ({})));
 });

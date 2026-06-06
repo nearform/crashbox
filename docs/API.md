@@ -50,6 +50,14 @@ the current session as a clean shutdown (teardown is an intentional, graceful ex
 `pagehide`), so the next load does **not** report it as a crash. Safe to call before `init` or more
 than once. See [What this library patches](../README.md#what-this-library-patches).
 
+### `clearRecovered()`
+
+Clear the crash record delivered on this load. `init` delivers a recovered crash once (via
+`onCrashRecovered`) and then retains it so the debug handle's `recovered()` can keep reporting it.
+Once your app has acknowledged or dismissed the crash, call `clearRecovered()` so the debug handle
+stops returning a stale record — keeping every consumer of "the crash this load" in sync with your
+app's state. No-op if nothing was recovered.
+
 ### `getStatus()` / `getActiveOptions()`
 
 Introspection. `getStatus()` → `{ sessionId, lastSeen, breadcrumbCount } | null`;
@@ -100,6 +108,7 @@ itself is always caught by next-load inference, not by a live event.
 
 - `__crashbox.dump()` — parsed contents of every `crashbox:*` localStorage key
 - `__crashbox.recovered()` — the crash record recovered on this load (or `null`)
+- `__crashbox.clearRecovered()` — clear that recovered record (after the app has handled it)
 - `__crashbox.getStatus()` — the live session
 - `__crashbox.clear()` — wipe crashbox's storage (reset between tests)
 - `__crashbox.teardown()` — fully unload crashbox (also removes this handle)
