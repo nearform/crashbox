@@ -335,8 +335,26 @@ $ npx serve
         };
         const jsHeapExhaustion = () => {
           note("trigger: JS heap exhaustion (may hard-kill the tab)");
+          // A bare `new ArrayBuffer` only grows VIRTUAL address space — the OS backs it
+          // with copy-on-write zero pages, so JSC throws a catchable RangeError before iOS
+          // feels real pressure (and the dropped buffer is GC'd). Touching every page forces
+          // a PHYSICAL commit (same as the WASM trigger), so resident memory actually climbs
+          // until iOS jetsam hard-kills the tab with no error. Yields via setTimeout so the
+          // snapshot heartbeat keeps ticking and the kill leaves a recoverable trail.
           const sink = [];
-          for (;;) sink.push(new ArrayBuffer(64 * 1048576));
+          const STEP = 64 * 1048576; // 64 MB per buffer
+          const grow = () => {
+            try {
+              const buf = new ArrayBuffer(STEP);
+              const view = new Uint8Array(buf);
+              for (let i = 0; i < view.length; i += 4096) view[i] = 1;
+              sink.push(buf);
+              setTimeout(grow, 0);
+            } catch (e) {
+              note(`JS alloc threw (caught, tab survived): ${e.message}`);
+            }
+          };
+          grow();
         };
         // The webgpu detector now wraps the device on attachGPUDevice — it breadcrumbs
         // device.lost / uncapturederror and the oversized-buffer warning automatically, so
