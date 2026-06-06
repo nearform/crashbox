@@ -563,12 +563,11 @@ export const wrap = async (name, fn, makeData) => {
     const result = await fn();
     breadcrumb(`${name}:ok`, { ms: Date.now() - t0 });
     return result;
-  } catch (err) {
-    const e = /** @type {any} */ (err);
+  } catch (/** @type {any} */ err) {
     breadcrumb(`${name}:error`, {
       ms: Date.now() - t0,
-      name: e?.name,
-      message: String(e?.message ?? e).slice(0, 200),
+      name: err?.name,
+      message: String(err?.message ?? err).slice(0, 200),
     });
     throw err;
   }

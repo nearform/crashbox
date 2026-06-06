@@ -416,12 +416,12 @@ const createWasmDetector = (ctx) => {
     let threw = null;
     try {
       result = originalGrow.call(this, delta);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       threw = e;
     }
     try {
       if (threw) {
-        const name = (threw && /** @type {any} */ (threw).name) || "error";
+        const name = (threw && threw.name) || "error";
         ctx.breadcrumb(`wasm memory.grow failed: ${name}`, {
           signal: "memory-near-cap",
         });
