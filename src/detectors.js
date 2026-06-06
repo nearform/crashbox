@@ -413,10 +413,11 @@ const createWasmDetector = (ctx) => {
   /** @this {any} @param {number} delta */
   const trackedGrow = function (delta) {
     let result;
+    /** @type {any} */
     let threw = null;
     try {
       result = originalGrow.call(this, delta);
-    } catch (/** @type {any} */ e) {
+    } catch (e) {
       threw = e;
     }
     try {
