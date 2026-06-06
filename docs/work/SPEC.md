@@ -266,15 +266,15 @@ crashbox/
     blackbox.js     # PURE: ring buffer (allocation-light) + JSON snapshot serialize/size-cap
     inference.js    # PURE: classifyLoad (discard-vs-crash guard) + classifyReason
     detectors.js    # opt-in source wrappers: js / webgpu / wasm (enrichment, not the crash catch)
-  test/             # node --test; pure modules tested directly. Browser fakes (happy-dom,
-                    #   fake-indexeddb) live here if/when needed, never in src/
+  test/             # node --test; pure modules tested directly. Browser fakes (happy-dom)
+                    #   live here if/when needed, never in src/
   docs/             # this spec + research findings + DESIGN.md (not published, not in demo copy)
   index.html        # demo / integration harness (imports ./src/index.js, no build step)
 ```
 
 - Pure JS + JSDoc; `tsc --checkJs --noEmit` in CI for type safety, no build-time transpile required.
 - Core has **no runtime dependencies** and an allocation-light hot path. Test-only fakes
-  (`fake-indexeddb`, `happy-dom`) are **devDependencies** imported only from `test/`.
+  (`happy-dom`) are **devDependencies** imported only from `test/`.
 - `blackbox.js` + `inference.js` are pure (plain data in/out) → unit-tested in Node with no DI;
   `index.js`/`detectors.js` browser wiring is validated via the demo + the real device.
 
