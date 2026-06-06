@@ -61,7 +61,14 @@ export const DEFAULTS = {
  */
 const DEFAULT_PREFIX = "crashbox";
 let keyPrefix = DEFAULT_PREFIX;
-/** Points at the most recent session id, so the next load knows what to recover. */
+/**
+ * Points at the most recent session id, so the next load knows what to recover. MULTI-TAB LIMITATION:
+ * there is exactly one `current` pointer per namespace, and localStorage is shared across all tabs on
+ * the origin. So a second tab's `init()` repoints `current` at its own session and consumes whatever
+ * `current` referenced — meaning a first tab that later crashes won't be recovered (its record is
+ * orphaned, reclaimed only by the `retentionMs` sweep). Crashbox is single-tab by design; robust
+ * per-tab recovery would need tab-scoped pointers (e.g. via the BroadcastChannel/Web Locks API).
+ */
 const currentKey = () => `${keyPrefix}:current`;
 const recordKeyPrefix = () => `${keyPrefix}:record:`;
 /** @param {string} id */
@@ -421,6 +428,7 @@ export const init = (options = {}) => {
         breadcrumb,
         setSnapshot,
         attachGPUDevice,
+        clearRecovered,
         getActiveOptions,
         getStatus,
       },
@@ -520,6 +528,18 @@ export const teardown = () => {
   recorder = null;
   lastRecovered = null;
   keyPrefix = DEFAULT_PREFIX;
+};
+
+/**
+ * Clear the crash record delivered on this load. `init` delivers a recovered crash once (via
+ * `onCrashRecovered`) and then keeps it on `lastRecovered` so the debug handle's `recovered()` can
+ * report it. Once the app has acknowledged/dismissed the crash it should call this so the debug
+ * handle stops reporting a stale record — keeping every consumer of "the crash this load" in sync.
+ * No-op if nothing was recovered.
+ * @returns {void}
+ */
+export const clearRecovered = () => {
+  lastRecovered = null;
 };
 
 /**

@@ -186,6 +186,32 @@ test("init({ debug: true }) attaches window.__crashbox with introspection helper
   assert.deepEqual(handle.dump(), {});
 });
 
+// --- clearRecovered (drop the recovered record once handled) --------------
+
+test("clearRecovered() clears the recovered record the debug handle reports", () => {
+  // Seed a previous session that recovers as a crash.
+  initCapturing();
+  crashbox.breadcrumb("device.lost");
+  crashbox.init({ debug: true }); // session B recovers A; handle attached
+  const handle = /** @type {any} */ (window).__crashbox;
+  assert.ok(
+    handle.recovered(),
+    "handle reports the recovered crash before clearing",
+  );
+
+  crashbox.clearRecovered();
+  assert.equal(
+    handle.recovered(),
+    null,
+    "after clearRecovered() the handle reports no record",
+  );
+});
+
+test("clearRecovered() is a safe no-op when nothing was recovered", () => {
+  crashbox.init();
+  assert.doesNotThrow(() => crashbox.clearRecovered());
+});
+
 // --- teardown (full unload) -----------------------------------------------
 
 test("teardown marks a clean shutdown → the session is NOT recovered as a crash", () => {
