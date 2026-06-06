@@ -40,6 +40,8 @@
     "dep:check": "npx npm-check-updates"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.7.0",
+    "@changesets/cli": "^2.31.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.9.2",
     "@webgpu/types": "^0.1.70",

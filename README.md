@@ -139,8 +139,9 @@ rather than throwing.
 ## Contributing
 
 Source is plain JS with JSDoc types; `npm run check` runs lint + type-check + tests + format.
-Architecture and the empirical research log are in [`docs/`](./docs/); contributor notes are in
-[`AGENTS.md`](./AGENTS.md).
+See [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) for the full dev workflow, releasing, and how to
+add a changeset for your change. Architecture and the empirical research log are in
+[`docs/`](./docs/); contributor notes are in [`AGENTS.md`](./AGENTS.md).
 
 ## License
 
