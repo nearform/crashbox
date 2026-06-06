@@ -151,6 +151,33 @@ $ npx serve
           max-width: 420px;
         }
       }
+      /* Title + GitHub icon on one centered row. */
+      .title-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+      }
+      /* GitHub icon link in the header — circular badge that tints on hover. */
+      .github-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        background: #edf2f7;
+        border-radius: 50%;
+        font-size: 1.4em;
+        color: #4a5568;
+        text-decoration: none;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .github-link:hover {
+        background: #2d3748;
+        color: #ffffff;
+      }
     </style>
     <title>crashbox Demo</title>
   </head>
@@ -426,7 +453,18 @@ $ npx serve
         return html`
           <div className="container">
             <div className="header">
-              <h1>crashbox</h1>
+              <div className="title-row">
+                <h1>crashbox</h1>
+                <a
+                  className="github-link"
+                  href="https://github.com/nearform/crashbox"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="crashbox on GitHub"
+                >
+                  <i className="ph ph-github-logo"></i>
+                </a>
+              </div>
               <p>
                 Local-first crash black box for the browser. Trigger a crash,
                 let the tab die, reload, and confirm the recovered record below.
