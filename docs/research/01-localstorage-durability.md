@@ -1,8 +1,8 @@
 # Research 01 — localStorage write durability under OOM kill
 
-> SPEC §8 #1. **Highest-risk assumption in the project.** Status: **CONFIRMED on iOS** — under a real
-> WASM OOM tab-kill on iPhone 15 Pro, the synchronous localStorage write survived with zero tail loss
-> (IndexedDB kept pace). Desktop Chrome done; desktop Safari + iOS PWA still nice-to-have.
+> The highest-risk assumption in the design. **Status: confirmed on iOS** — under a real WASM OOM
+> tab-kill on iPhone 15 Pro, the synchronous localStorage write survived with zero tail loss
+> (IndexedDB kept pace). Desktop Chrome also done; desktop Safari + iOS PWA remain nice-to-have.
 
 ## Question
 
@@ -105,21 +105,21 @@ crash vs. discard signature analysis.
 
 ## Interpretation & caveats
 
-- On desktop Chrome the localStorage-sync-fallback assumption **holds**: nothing is lost at the tail,
-  even IDB keeps up. So far so good.
+- The localStorage-sync assumption **holds on both desktop Chrome and iOS Safari**: nothing is lost
+  at the tail, and IndexedDB kept exact pace in every run.
 - **`Page.crash` is a relatively graceful renderer abort** (intentional crash path) and may flush
-  storage more readily than a true OOM `SIGKILL`. It is a _lower bound_ on data loss, not proof of
-  durability under a hard kill.
-- The decisive case — a **hard OOM kill on memory-constrained iOS Safari**, where Chrome's desktop
-  flush-on-teardown does not apply — remains **untested and is the load-bearing manual run**
-  (iPhone 15 Pro). Desktop results do not transfer.
+  storage more readily than a true OOM `SIGKILL`, so the desktop result alone is a _lower bound_ on
+  durability. The decisive case is the iOS one below.
+- The decisive case — a **hard OOM kill on memory-constrained iOS Safari** — was reproduced via WASM
+  memory growth (the JS-allocation vector can't kill the tab) and **confirmed**: the synchronous
+  localStorage write survived with zero tail loss. This is the load-bearing result; desktop numbers
+  do not transfer on their own.
 
 ## Decision this drives
 
-- Desktop Chrome: localStorage sync fallback is trustworthy; IDB is also reliable at teardown, so it
-  can hold the rich black box and localStorage need only hold the last-gasp heartbeat/crumb.
-- **Gate before committing the architecture:** the iOS Safari run. If sync localStorage loses tail
-  writes under a real iOS OOM, the heartbeat cadence must shrink and/or the "most-recent crumb"
-  fallback design changes. Until then, treat the localStorage fallback as _validated on desktop
-  only_.
-- Heartbeat cadence: pending the iOS tail-loss number.
+- The load-bearing Layer-1 assumption **holds on the primary target**: the synchronous localStorage
+  write is durable across a real iOS OOM kill, so it can carry the last-gasp heartbeat/crumb, and
+  localStorage is sufficient as the sole store (IndexedDB deferred — see
+  [FUTURE_WORK.md](../work/FUTURE_WORK.md)).
+- Heartbeat cadence: the zero-tail-loss result means the default ~2s cadence needs no shrinking on
+  durability grounds.

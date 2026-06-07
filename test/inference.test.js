@@ -6,7 +6,7 @@ import {
   REASON_SIGNALS,
 } from "../src/inference.js";
 
-// Phase 1: crash inference — the load truth table (discard-vs-crash guard) and the
+// Crash inference — the load truth table (discard-vs-crash guard) and the
 // reason precedence from the breadcrumb tail. Plain data in/out, no browser.
 
 /**

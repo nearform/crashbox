@@ -11,8 +11,8 @@ import {
   DEFAULTS,
 } from "../src/index.js";
 
-// Phase 0 smoke test: the public API surface exists, is callable, and option
-// resolution works. Behavior (persistence/detection/inference) is tested in Phases 1+.
+// Smoke test: the public API surface exists, is callable, and option resolution
+// works. Behavior (persistence/detection/inference) is covered in the other test files.
 
 test("public API is callable and exported", () => {
   assert.equal(typeof init, "function");
@@ -39,7 +39,7 @@ test("init resolves defaults and merges overrides", () => {
   assert.equal(opts?.snapshotMaxBytes, DEFAULTS.snapshotMaxBytes);
 });
 
-test("breadcrumb / setSnapshot / attachGPUDevice are safe no-ops in Phase 0", () => {
+test("breadcrumb / setSnapshot / attachGPUDevice are safe no-ops in a non-browser context", () => {
   init();
   assert.doesNotThrow(() => breadcrumb("hello", { a: 1 }));
   assert.doesNotThrow(() => breadcrumb("no-data"));

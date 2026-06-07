@@ -1,32 +1,23 @@
 # crashbox research log
 
-Empirical investigations from [SPEC §8](../work/SPEC.md#8-research-directions-for-claude-code-open-questions-to-investigate).
-Much of this is browser-version-specific and undocumented, so each item is validated with a
-throwaway repro page (under [`spikes/`](./spikes/)) rather than assumed. Findings docs record the
-date, environment (browser + version + device), method, and the decision the result drives.
+Empirical investigations behind crashbox's design (see [SPEC.md](../work/SPEC.md)). Much of this is
+browser-version-specific and undocumented, so each item is validated with a throwaway repro page
+(under [`spikes/`](./spikes/)) rather than assumed. Each findings doc records the date, environment
+(browser + version + device), method, and the decision the result drove.
 
-## Status
+## Findings
 
-| #   | Item                                             | Risk                                              | Status                                    | Findings                                                         |
-| --- | ------------------------------------------------ | ------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
-| 1   | localStorage write durability under OOM kill     | **highest** — Layer 1 fallback rests on it        | **CONFIRMED (desktop + iOS)**             | [01-localstorage-durability.md](./01-localstorage-durability.md) |
-| 2   | iOS tab-discard vs. crash disambiguation         | **high** — false-positive guard on primary target | **discriminator synthesized**             | [02-ios-discard-vs-crash.md](./02-ios-discard-vs-crash.md)       |
-| 7   | Snapshot serialization cost / capability         | high — must not cause the OOM it detects          | desktop done, iOS pending                 | [07-snapshot-serialization.md](./07-snapshot-serialization.md)   |
-| 3   | WebGPU device-loss taxonomy                      | med — gates WebGPU detector (Phase 5)             | **iOS done**                              | [03-webgpu-device-loss.md](./03-webgpu-device-loss.md)           |
-| 4   | GPU-process-kill-takes-tab time budget           | med                                               | **iOS done** — tab dies, no `device.lost` | [03-webgpu-device-loss.md](./03-webgpu-device-loss.md)           |
-| 5   | Reporting API `crash` local ingestion (Chromium) | low — corroboration only                          | not started                               | —                                                                |
-| 6   | Memory-pressure leading indicators               | med — drives `onMemoryPressure`                   | **iOS done**                              | [06-memory-pressure.md](./06-memory-pressure.md)                 |
-| 8   | In-browser LLM OOM profile (flagship)            | high — real-world validation                      | not started                               | —                                                                |
-| 9   | Black-box size budget under iOS eviction         | med — sets default limits                         | not started                               | —                                                                |
-
-## Current focus (pre-implementation spikes)
-
-Items **1, 7, 2** are the load-bearing assumptions and run _before_ any SDK code:
-
-- **Spike 1 / 7** — desktop Chrome runs driven via Chrome CDP (automated); desktop Safari + iOS
-  Safari + iOS PWA runs are manual on real hardware (iPhone 15 Pro).
-- **Spike 2** — manual iOS runs only (no CDP on device); data collection starts early since it's the
-  longest-lead, highest false-positive risk.
+| #   | Item                                             | Status                                    | Findings                                                         |
+| --- | ------------------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------- |
+| 1   | localStorage write durability under OOM kill     | **confirmed (desktop + iOS)**             | [01-localstorage-durability.md](./01-localstorage-durability.md) |
+| 2   | iOS tab-discard vs. crash disambiguation         | **discriminator synthesized**             | [02-ios-discard-vs-crash.md](./02-ios-discard-vs-crash.md)       |
+| 3   | WebGPU device-loss taxonomy                      | **iOS done**                              | [03-webgpu-device-loss.md](./03-webgpu-device-loss.md)           |
+| 4   | GPU-process-kill-takes-tab time budget           | **iOS done** — tab dies, no `device.lost` | [03-webgpu-device-loss.md](./03-webgpu-device-loss.md)           |
+| 5   | Reporting API `crash` local ingestion (Chromium) | not investigated (deferred)               | —                                                                |
+| 6   | Memory-pressure leading indicators               | **iOS done**                              | [06-memory-pressure.md](./06-memory-pressure.md)                 |
+| 7   | Snapshot serialization cost / capability         | desktop done, iOS pending                 | [07-snapshot-serialization.md](./07-snapshot-serialization.md)   |
+| 8   | In-browser LLM OOM profile                       | not investigated                          | —                                                                |
+| 9   | Black-box size budget under iOS eviction         | not investigated                          | —                                                                |
 
 ## Running the spikes
 

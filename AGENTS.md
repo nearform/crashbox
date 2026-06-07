@@ -89,3 +89,8 @@ look broken (there is no `dist/split.js`), but they're not. TypeScript resolves 
 `index.html` does `import FOO from './src/index.js'`. The
 [demo-page workflow](.github/workflows/demo-page.yml) copies `src/` (not `dist/`) into
 `demo-public/`. There is no build step for the demo.
+
+The demo's own stack constraints: the **entire** demo lives in `index.html` (no other JS/CSS
+files); ESM modules only, with import maps for bare specifiers; external deps load from
+`https://esm.sh/` (never added to `package.json`); UI is React + [htm](https://www.npmjs.com/package/htm);
+styling is [PureCSS](https://pure-css.github.io/); icons are [Phosphor](https://phosphoricons.com/).

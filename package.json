@@ -16,7 +16,18 @@
   "keywords": [
     "webgpu",
     "webassembly",
-    "crash reporting"
+    "wasm",
+    "crash reporting",
+    "crash recovery",
+    "error recovery",
+    "oom",
+    "out-of-memory",
+    "ios",
+    "safari",
+    "breadcrumbs",
+    "local-first",
+    "black box",
+    "tab crash"
   ],
   "type": "module",
   "main": "src/index.js",
@@ -40,6 +51,8 @@
     "dep:check": "npx npm-check-updates"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.7.0",
+    "@changesets/cli": "^2.31.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.9.2",
     "@webgpu/types": "^0.1.70",

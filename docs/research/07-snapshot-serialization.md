@@ -1,7 +1,6 @@
 # Research 07 — Snapshot serialization cost & capability
 
-> SPEC §8 #7. Status: **in progress** — desktop Chrome done (below); desktop Safari + iOS spot-check
-> pending.
+> **Status: in progress** — desktop Chrome done (below); desktop Safari + iOS spot-check pending.
 
 ## Question
 
@@ -65,12 +64,12 @@ size cap keeps the black box "tiny" (KB, not MB)?
 
 ## Decision this drives
 
-- **Snapshot contract (resolves the SPEC §0 open item):** the snapshot must be **JSON-serializable**.
+- **Snapshot contract:** the snapshot must be **JSON-serializable**.
   `setSnapshot` JSON-serializes defensively (try/catch; on `TypeError`/cycle, reject + breadcrumb a
   warning rather than throw into the app). No `structuredClone` dependency in the core.
-- **Size cap:** enforce a JSON **byte cap in the low tens of KB** (default ~16–32 KB pending §8 #9
+- **Size cap:** enforce a JSON **byte cap in the low tens of KB** (default ~16–32 KB pending #9
   iOS eviction budget). At that size, serialization is sub-50 µs — no measurable hot-path cost.
 - **No Worker needed** for the persist path at KB scale; main-thread JSON is sub-millisecond. Revisit
   only if a consumer needs MB-scale snapshots (out of scope for the tiny black box).
-- `src/blackbox/snapshot.js`: `JSON.stringify` + byte-length cap + try/catch; store the string in
-  both IDB and the localStorage fallback.
+- `src/blackbox.js`: `JSON.stringify` + byte-length cap + try/catch; store the string in
+  localStorage.
