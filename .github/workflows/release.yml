@@ -26,7 +26,6 @@ jobs:
         with:
           node-version-file: ".nvmrc"
           registry-url: "https://registry.npmjs.org"
-          auth-type: "oidc"
       - name: Upgrade npm for OIDC
         run: npm i -g npm@">=11.5.1"
       - name: Install dependencies
