@@ -1,4 +1,4 @@
-# `crashbox`
+# crashbox 💥
 
 Local-first crash black box for the browser: survives hard tab kills (WebGPU,
 WASM, in-browser OOM) and surfaces the recovered state on next load.
@@ -11,15 +11,16 @@ aims to work in any browser and application environment (from desktop to mobile)
 And calling out a primary motivation, **iOS Safari**, is particularly challenging
 where WebGPU/WASM workloads can take down the whole tab.
 
-crashbox takes the only approach that works when you can't run code during the crash:
+crashbox takes the only approach that works when you can't run code during the crash --
+continuously persisting a tiny "black box" (recent breadcrumbs + a state snapshot + a heartbeat) to
+storage that survives the renderer dying, writing a **clean-shutdown marker** on graceful exit, and
+on the **next load** deciding what happened with a breadcrumb trail and structured data the app
+can ingest and review on next load.
 
-> Continuously persist a tiny "black box" (recent breadcrumbs + a state snapshot + a heartbeat) to
-> storage that survives the renderer dying, write a **clean-shutdown marker** on graceful exit, and
-> on the **next load** decide: _snapshot present + no clean-shutdown marker = the previous session
-> crashed_ — then infer **why** from the breadcrumb trail and hand the app a `CrashRecord`.
+Some nice things about this library:
 
 - **Zero runtime dependencies.** Plain JS (with shipped TypeScript types). Drop-in.
-- **iOS-first.** Validated on real iOS 18.7 / Safari 26.3 hardware.
+- **iOS-friendly.** Validated on real iOS 18.7 / Safari 26.3 hardware.
 - **Allocation-light.** The instrumentation must not cause the crash it's trying to catch.
 
 ## Install
@@ -58,33 +59,28 @@ recover-on-load for you.
 
 ## How it works
 
-1. **Black box (durable write path).** A fixed-capacity breadcrumb ring buffer + your latest
-   snapshot + a `lastSeen` heartbeat are written to `localStorage` on a throttled cadence. The write
-   is synchronous, and a synchronous `localStorage` write survives the renderer being killed —
-   verified on a real iOS OOM kill ([research §1](./docs/research/01-localstorage-durability.md)).
-2. **Clean-shutdown marker.** On `pagehide` with `persisted: false` (the reliable graceful-exit
-   signal — _not_ `beforeunload`/`unload`, which are unreliable on mobile), crashbox writes a
-   "clean" flag.
-3. **Recover on next load.** `init` reads the previous session and classifies it:
-   - `document.wasDiscarded` → an iOS tab **discard**, suppressed (never a crash);
-   - clean-shutdown marker present → a graceful **clean** exit;
-   - a live session with neither → a **crash** → `onCrashRecovered(record)`.
-4. **Reason inference.** On a crash, the cause is read from the **breadcrumb tail** (a hard kill
-   has no live event to catch), producing one of:
+The black box (a breadcrumb ring buffer + your snapshot + a
+`lastSeen` heartbeat) is written to `localStorage` synchronously, which survives the renderer being
+killed — verified on a real iOS OOM kill ([research §1](./docs/research/01-localstorage-durability.md)).
+A clean-shutdown marker is written only on `pagehide` with `persisted: false` (the one reliable
+graceful-exit signal — _not_ `beforeunload`/`unload`). On the next load `init` classifies the
+previous session: `document.wasDiscarded` → an iOS tab discard (suppressed), marker present → a
+clean exit, neither → a **crash**, whose cause is read from the breadcrumb tail (a hard kill has no
+live event):
 
-   | `reason`             | meaning                                                  |
-   | -------------------- | -------------------------------------------------------- |
-   | `webgpu-device-lost` | WebGPU device loss / GPU-process OOM                     |
-   | `oom`                | WASM / memory exhaustion (`RangeError`, near-cap growth) |
-   | `hard-kill`          | died with a heartbeat trail but no attributable cause    |
-   | `unknown`            | nothing to go on                                         |
+| `reason`             | meaning                                                  |
+| -------------------- | -------------------------------------------------------- |
+| `webgpu-device-lost` | WebGPU device loss / GPU-process OOM                     |
+| `oom`                | WASM / memory exhaustion (`RangeError`, near-cap growth) |
+| `hard-kill`          | died with a heartbeat trail but no attributable cause    |
+| `unknown`            | nothing to go on                                         |
 
 ## API
 
 `init(options?)`, `breadcrumb(msg, data?)`, `wrap(name, fn, makeData?)` (breadcrumb an async
 operation's start/ok/error), `setSnapshot(state)`, `attachGPUDevice(device)`, and `teardown()`
 (plus `clearRecovered()` to drop the recovered record once handled, and `getStatus()` /
-`getActiveOptions()` for introspection — `getStatus()` now also returns a `warnings` array of
+`getActiveOptions()` for introspection — `getStatus()` also returns a `warnings` array of
 in-session memory-pressure / device-loss events). Three detectors —
 `js` (default), `webgpu`, `wasm` — enrich the breadcrumb trail; they are **enrichment only**, since
 the hard kill itself is always caught by next-load inference, never a live event. Shipped TypeScript
@@ -95,29 +91,14 @@ and platform caveats — **lives in [docs/API.md](./docs/API.md).**
 
 ## What this library patches
 
-The detectors enrich the crash trail by **monkey-patching native methods in place** — they
-replace a method with a wrapper that forwards to the saved original. Every wrap is reverted when
-the detector is stopped (on re-`init`), and [`teardown()`](./docs/API.md#teardown) reinstates **all**
-of them at once — restoring the native methods so the page is left as if crashbox never loaded:
+The `webgpu` and `wasm` detectors enrich the crash trail by **monkey-patching native methods in
+place** (e.g. `GPUDevice.createBuffer`, `WebAssembly.Memory.prototype.grow`) — each forwards to the
+saved original, is reverted when the detector stops, and all are reinstated at once by
+[`teardown()`](./docs/API.md#teardown), leaving the page as if crashbox never loaded. The `js`
+detector's event listeners and the `debug` handle are **not** patches.
 
-| Native API                                                                                                                                      | Detector | Why we patch it                                                                      |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------ |
-| [`GPUDevice.createBuffer`](https://developer.mozilla.org/en-US/docs/Web/API/GPUDevice/createBuffer)                                             | `webgpu` | Flag a buffer request larger than `limits.maxBufferSize` before it's allocated       |
-| [`GPUQueue.writeBuffer`](https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/writeBuffer)                                                 | `webgpu` | Tally committed GPU bytes for the throttled activity log                             |
-| [`GPUQueue.submit`](https://developer.mozilla.org/en-US/docs/Web/API/GPUQueue/submit)                                                           | `webgpu` | Count submits to annotate the activity breadcrumb                                    |
-| [`WebAssembly.Memory.prototype.grow`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Memory/grow) | `wasm`   | Track committed linear memory across instances (the only iOS memory-pressure signal) |
-
-The first three are **per-instance** patches on the `GPUDevice`/`GPUQueue` you pass to
-`attachGPUDevice`. The last is a **prototype** patch, so it affects every `WebAssembly.Memory` in
-the realm while the `wasm` detector is active — which is why it's reverted on teardown.
-
-Two things that are **not** monkey-patches:
-
-- [`window.__crashbox`](https://developer.mozilla.org/en-US/docs/Web/API/Window) is a global handle
-  _added_ only when `debug: true` (see [Debugging](./docs/API.md#debugging)) — it augments the global namespace
-  rather than overriding a native API. The SDK never touches `window` unless `debug` is set.
-- The `error` / `unhandledrejection` / `uncapturederror` / `pagehide` listeners are ordinary
-  `addEventListener` registrations (and are removed on teardown), not patches.
+**Full list of what's patched, per-instance vs. prototype, and why →
+[docs/API.md](./docs/API.md#what-this-library-patches).**
 
 ## Caveats
 

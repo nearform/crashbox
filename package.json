@@ -16,7 +16,18 @@
   "keywords": [
     "webgpu",
     "webassembly",
-    "crash reporting"
+    "wasm",
+    "crash reporting",
+    "crash recovery",
+    "error recovery",
+    "oom",
+    "out-of-memory",
+    "ios",
+    "safari",
+    "breadcrumbs",
+    "local-first",
+    "black box",
+    "tab crash"
   ],
   "type": "module",
   "main": "src/index.js",

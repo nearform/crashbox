@@ -24,7 +24,7 @@ the part that's unit-tested.
 | -------------- | --------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `index.js`     | Public API + browser wiring                   | #1 — localStorage-only black box; #2 — clean marker on `pagehide{persisted:false}` |
 | `types.js`     | JSDoc typedef hub                             | —                                                                                  |
-| `blackbox.js`  | ring buffer + JSON snapshot serialize/cap     | §2 allocation-light; #7 JSON, ~16–32 KB, no `structuredClone`                      |
+| `blackbox.js`  | ring buffer + JSON snapshot serialize/cap     | allocation-light hot path; #7 JSON, ~16–32 KB, no `structuredClone`                |
 | `inference.js` | classifyLoad (discard guard) + classifyReason | #2 `wasDiscarded` suppressor; #1/#4 GPU+WASM OOM hard-kill, reason from tail       |
 | `detectors.js` | js / webgpu / wasm wrappers                   | #6 no longtask/memory API on iOS; #3/#4 `GPUOutOfMemoryError` precedes the kill    |
 
