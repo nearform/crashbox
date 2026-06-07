@@ -1,10 +1,9 @@
-# Research 03 — WebGPU device-loss taxonomy (+ #4 GPU-kill-takes-tab)
+# Research 03 — WebGPU device-loss taxonomy (+ GPU-kill-takes-tab)
 
-> SPEC §8 #3 and #4. Status: **iOS done (both)** — full taxonomy on iPhone 15 Pro: graceful destroy,
-> oversized buffer, lazy alloc, and a **real VRAM-commit OOM that hard-killed the tab with no
-> `device.lost`** (#4 answered). WebGPU is the **primary v1 detector target**. The implemented
-> detector (`src/detectors.js`) was device-validated 2026-05-29 — see
-> [Follow-up](#follow-up-2026-05-29--crashbox-webgpu-detector-on-device-phase-5).
+> **Status: iOS done (both).** Full taxonomy on iPhone 15 Pro: graceful destroy, oversized buffer,
+> lazy alloc, and a **real VRAM-commit OOM that hard-killed the tab with no `device.lost`**. WebGPU
+> is the primary detector target. The implemented detector (`src/detectors.js`) was device-validated
+> 2026-05-29 — see [Follow-up](#follow-up-2026-05-29--crashbox-webgpu-detector-on-device).
 
 ## Question
 
@@ -23,7 +22,7 @@ Spike page: [`spikes/webgpu-device-loss.html`](./spikes/webgpu-device-loss.html)
 2. **Oversized buffer** — `createBuffer` at 1.5× / 4× / 64× `maxBufferSize`; capture validation /
    out-of-memory errors and whether the device is lost.
 3. **Buffer-alloc flood** — allocate large buffers in a loop; watch for `device.lost` vs. a tab kill
-   (the §8 #4 GPU-process-kill-takes-tab case). The page persists its event log to localStorage, so a
+   (the #4 GPU-process-kill-takes-tab case). The page persists its event log to localStorage, so a
    tab death is visible in the "previousLoad" field after reload.
 
 Run on the iPhone 15 Pro; copy the "SUMMARY" box after each step.
@@ -92,7 +91,7 @@ device loss and no tab death**; a single `uncapturederror: GPUOutOfMemoryError` 
 (written/bound/dispatched).** Allocation alone cannot exhaust the GPU or trigger device loss, and the
 detector's early-warning **cannot wait for `createBuffer` to fail**.
 
-**4 · committed flood — real VRAM (§8 #4, the GPU-kill case):** uploaded 128 MB into each buffer via
+**4 · committed flood — real VRAM (#4, the GPU-kill case):** uploaded 128 MB into each buffer via
 `queue.writeBuffer` (one reused CPU source). The **tab was OOM-killed** after ~162 GB of queued
 uploads. Recovered `previousLoad` trail:
 
@@ -110,7 +109,7 @@ device-acquired → commit-flood-start → uncapturederror:GPUOutOfMemoryError
 - (The ~162 GB nominal figure reflects `writeBuffer` copies queued faster than they commit on
   unified memory; the point is the tab died and no loss event fired.)
 
-### Follow-up 2026-05-29 — crashbox webgpu detector on-device (Phase 5)
+### Follow-up 2026-05-29 — crashbox webgpu detector on-device
 
 Validated the implemented detector (`src/detectors.js`) end-to-end against the demo on the same
 device:
@@ -133,7 +132,7 @@ Two refinements to the findings above:
   `onDeviceLossImminent` is **not guaranteed** for a real committed GPU OOM — **Layer-3 inference is
   the load-bearing path**, and the next-load reason resolves to `webgpu-device-lost` only if a webgpu
   marker is in the breadcrumb trail.
-  - **Gap exposed → FIXED (Phase 5.1).** In the original run the marker came from the _demo's_ own
+  - **Gap exposed → fixed.** In the original run the marker came from the _demo's_ own
     `gpu committed ~N MB` milestones; the detector only breadcrumbed loss / error / oversized events,
     not routine GPU activity, so a real app hit by a sub-second committed OOM with no `uncapturederror`
     would have recovered as `hard-kill`. The webgpu detector now keeps a **throttled rolling
@@ -145,14 +144,14 @@ Two refinements to the findings above:
 
 ## Synthesized findings (iOS 18.7 / Safari 26.3) → detector design
 
-| Trigger                            | `device.lost`        | tab      | how it surfaces                                         |
-| ---------------------------------- | -------------------- | -------- | ------------------------------------------------------- |
-| `device.destroy()`                 | `reason:"destroyed"` | alive    | `device.lost` resolves (catchable)                      |
-| buffer > `maxBufferSize`           | none                 | alive    | `GPUValidationError` via `uncapturederror`              |
-| createBuffer flood (no usage)      | none                 | alive    | one `GPUOutOfMemoryError`; lazy, no commit              |
-| **real VRAM commit (writeBuffer)** | **none**             | **dies** | early `GPUOutOfMemoryError`, then hard tab kill (§8 #4) |
+| Trigger                            | `device.lost`        | tab      | how it surfaces                                      |
+| ---------------------------------- | -------------------- | -------- | ---------------------------------------------------- |
+| `device.destroy()`                 | `reason:"destroyed"` | alive    | `device.lost` resolves (catchable)                   |
+| buffer > `maxBufferSize`           | none                 | alive    | `GPUValidationError` via `uncapturederror`           |
+| createBuffer flood (no usage)      | none                 | alive    | one `GPUOutOfMemoryError`; lazy, no commit           |
+| **real VRAM commit (writeBuffer)** | **none**             | **dies** | early `GPUOutOfMemoryError`, then hard tab kill (#4) |
 
-**`src/detectors/webgpu.js`:**
+**`src/detectors.js` (webgpu):**
 
 - Treat `device.lost` `reason === "destroyed"` as intentional (not a crash); any other reason =
   unexpected loss → crash breadcrumb. **Note: a real GPU OOM does NOT fire `device.lost` at all** — it
@@ -160,9 +159,9 @@ Two refinements to the findings above:
 - Early-warning (`onDeviceLossImminent`): fire on **`uncapturederror` of type `GPUOutOfMemoryError`**
   (it precedes the kill by seconds — the real actionable signal) and/or **proactively compare
   requested buffer sizes to `maxBufferSize`**. Do **not** rely on `createBuffer` throwing or on a
-  device-loss event. **Caveat (Phase 5 device test):** in the _committed_ `writeBuffer` path the kill
+  device-loss event. **Caveat (device test):** in the _committed_ `writeBuffer` path the kill
   was sub-second and `GPUOutOfMemoryError` never fired — the early-warning window is not guaranteed;
-  see the [Follow-up](#follow-up-2026-05-29--crashbox-webgpu-detector-on-device-phase-5).
+  see the [Follow-up](#follow-up-2026-05-29--crashbox-webgpu-detector-on-device).
 - `adapter.info` is `{}` on iOS → no GPU fingerprint; don't branch on it.
 - **GPU OOM and WASM OOM converge:** both take the tab with no live event → the same Layer-3
   "snapshot + no clean-shutdown marker" inference handles both; the reason is disambiguated from the
@@ -170,6 +169,6 @@ Two refinements to the findings above:
 
 ## Decision this drives
 
-- `src/detectors/webgpu.js`: how to distinguish `"destroyed"` (intentional) from unexpected loss, and
+- `src/detectors.js` (webgpu): how to distinguish `"destroyed"` (intentional) from unexpected loss, and
   the oversized-buffer / error-rate threshold for `onDeviceLossImminent`.
 - Which loss cases are catchable (detector) vs. require Layer-3 inference (the GPU-kills-tab case).

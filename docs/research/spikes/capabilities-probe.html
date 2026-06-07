@@ -24,8 +24,8 @@
   <body>
     <h1>crashbox spike — iOS capabilities probe</h1>
     <p>
-      Loads instantly. Copy the box below. Probes memory-pressure indicators (§8
-      #6) and the storage budget (§8 #9). See
+      Loads instantly. Copy the box below. Probes memory-pressure indicators
+      (#6) and the storage budget (#9). See
       <a href="../06-memory-pressure.md">findings doc</a>.
     </p>
     <pre id="out">probing…</pre>
@@ -33,7 +33,7 @@
     <script type="module">
       const out = {
         ua: navigator.userAgent,
-        // memory-pressure leading indicators (§8 #6):
+        // memory-pressure leading indicators (#6):
         "navigator.deviceMemory": navigator.deviceMemory ?? "unsupported",
         "navigator.hardwareConcurrency":
           navigator.hardwareConcurrency ?? "unsupported",
@@ -42,7 +42,7 @@
         crossOriginIsolated: self.crossOriginIsolated,
         "measureUserAgentSpecificMemory present":
           typeof performance.measureUserAgentSpecificMemory === "function",
-        // storage budget (§8 #9):
+        // storage budget (#9):
         storageEstimate: "pending",
         persisted: "pending",
         // lifecycle / detector availability:

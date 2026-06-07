@@ -1,11 +1,11 @@
 # crashbox — future work
 
-Deliberately **out of scope for the current v1 launch effort.** These are real, tracked ideas — not
-forgotten — but none block v1, and several are low ROI for the primary target (iOS Safari). Pull one
-up here into a phase only when a consumer need or a launch decision justifies it.
+Deliberately **out of scope.** These are real, tracked ideas — not forgotten — but none are needed
+today, and several are low ROI for the primary target (iOS Safari). Pull one up only when a consumer
+need justifies it.
 
-> **Shipped in v1, not here:** README / usage docs, a `namespace` option (isolates co-hosted apps
-> on one origin), and a `retentionMs` orphaned-record sweep.
+> **Already shipped (not future work):** the `namespace` option (isolates co-hosted apps on one
+> origin) and a `retentionMs` orphaned-record sweep.
 
 ---
 
@@ -32,14 +32,14 @@ strict per-tab keying; if not, this stays a documented limitation.
 Delivery is **fire-once**: the previous record is consumed (deleted) during `init`, before the
 callback returns. If the app's handler throws or the page dies mid-handling, the record is gone. A
 hardening would defer deletion until the record is acknowledged — either an explicit ack API, or a
-"delivered" marker cleared on the next clean `init`. Edge-case robustness, not a v1 blocker.
+"delivered" marker cleared on the next clean `init`. Edge-case robustness, not currently needed.
 
-## Reporting API corroboration (the former "Phase 7")
+## Reporting API corroboration
 
 Ingest the browser-native `crash` report and set `CrashRecord.corroborated = true` when it confirms
 the inferred reason (today `corroborated` is always `false`).
 
-**Why it's deferred — it adds almost nothing for v1:**
+**Why it's deferred — it adds almost nothing:**
 
 - **Chromium crashes are already detected and recovered** by the existing cross-browser heuristic
   (localStorage black box + no clean-shutdown marker + breadcrumb-trail inference). The Reporting API
@@ -48,8 +48,8 @@ the inferred reason (today `corroborated` is always `false`).
   heuristic is load-bearing there regardless.
 - **Delivery is awkward and server-bound.** A crash kills the page, so a `ReportingObserver` can't
   observe its own renderer's death; Chromium queues the `crash` report to a configured
-  `Reporting-Endpoints` server, not readily to a fresh client-side page. crashbox is local-only in
-  v1 (no backend), so wiring this up is non-trivial.
+  `Reporting-Endpoints` server, not readily to a fresh client-side page. crashbox is local-only
+  (no backend), so wiring this up is non-trivial.
 
 **The one genuine value-add** (if revisited): when the heuristic returns `hard-kill` / `unknown`
 because the breadcrumb trail was empty, a `crash` report's `reason` (e.g. `oom`) could fill it in.
@@ -67,28 +67,29 @@ methods. A committed OOM driven entirely by internal growth, with no JS-side sig
 `hard-kill` instead of `oom` / `webgpu-device-lost`.
 
 **Fix-forward:** keep references to created/exported memories and poll their `buffer.byteLength` on a
-throttled interval, feeding the same pressure thresholds. Edge case for v1 (most runtimes grow via
-JS), but the honest gap. See [research §3 follow-up](../research/03-webgpu-device-loss.md) and
+throttled interval, feeding the same pressure thresholds. An edge case (most runtimes grow via JS),
+but the honest gap. See [research §3 follow-up](../research/03-webgpu-device-loss.md) and
 [research §6](../research/06-memory-pressure.md).
 
 ## IndexedDB richer store
 
-v1 is **localStorage-only** (SPEC §0): research §8 #1 proved a synchronous localStorage write survives
-a real iOS OOM and the black box is KB-sized, so IndexedDB was dropped. Revisit only if a consumer
-needs a larger / richer box (bigger snapshots, structured-clone fidelity, more history) than
-localStorage + JSON can carry.
+The store is **localStorage-only** (see [SPEC.md](./SPEC.md)): a synchronous localStorage write
+survives a real iOS OOM and the black box is KB-sized, so IndexedDB was dropped. Revisit only if a
+consumer needs a larger / richer box (bigger snapshots, structured-clone fidelity, more history)
+than localStorage + JSON can carry.
 
 ## Heartbeat-staleness threshold tuning
 
 `classifyReason` treats any recorded heartbeat (`heartbeatAgeMs != null`) as enough to call a
-no-cause crash a `hard-kill`. A tuned `> N × heartbeatMs` threshold was floated (SPEC §0) but the
-binary check is fine in practice — research §2 showed a crash auto-reloads fast, so a _short_ gap
-doesn't rule out a crash. Revisit only if false `hard-kill`s show up in the field.
+no-cause crash a `hard-kill`. A tuned `> N × heartbeatMs` threshold is possible, but the binary
+check is fine in practice — [research §2](../research/02-ios-discard-vs-crash.md) showed a crash
+auto-reloads fast, so a _short_ gap doesn't rule out a crash. Revisit only if false `hard-kill`s
+show up in the field.
 
 ## Server upload hook
 
-SPEC §1 non-goal for v1: data stays 100% local. An optional hook to ship recovered records to a
-backend (and the Reporting-Endpoints corroboration above) could come later, out of scope now.
+A non-goal (see [SPEC.md](./SPEC.md)): data stays 100% local. An optional hook to ship recovered
+records to a backend (and the Reporting-Endpoints corroboration above) could come later.
 
 ---
 
@@ -97,6 +98,6 @@ backend (and the Reporting-Endpoints corroboration above) could come later, out 
 Capturing a real `wasDiscarded:true` iOS discard remains the one unconfirmed link in the
 no-false-positive guarantee (iOS 18.7 / 8 GB resisted it twice). It is **non-blocking** —
 `wasDiscarded` can only ever _suppress_ a crash, never create a false positive — and the everyday
-backgrounding false-positive cases are already device-confirmed. Canonical tracking stays in
-[SPEC §0](./SPEC.md#0-resolved-decisions--open-questions) / [research §2](../research/02-ios-discard-vs-crash.md);
-listed here so it's visible as deferred, not dropped.
+backgrounding false-positive cases are already device-confirmed. Tracked in
+[research §2](../research/02-ios-discard-vs-crash.md); listed here so it's visible as deferred, not
+dropped.

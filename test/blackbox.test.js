@@ -6,7 +6,7 @@ import {
   parseSnapshot,
 } from "../src/blackbox.js";
 
-// Phase 1: the pure black box. Ring buffer fill/overflow/order, and JSON snapshot
+// The pure black box. Ring buffer fill/overflow/order, and JSON snapshot
 // serialize/cap + parse round-trips — all directly under node --test, no browser.
 
 /**

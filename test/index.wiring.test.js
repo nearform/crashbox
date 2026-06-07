@@ -2,7 +2,7 @@ import { test, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Window } from "happy-dom";
 
-// Phase 2: index.js browser wiring (localStorage black box + heartbeat + clean-shutdown
+// index.js browser wiring (localStorage black box + heartbeat + clean-shutdown
 // marker + recover-on-load) tested in Node via happy-dom. node --test isolates each file in
 // its own process, so these installed globals don't leak into the plain-Node smoke test.
 //

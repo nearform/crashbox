@@ -2,7 +2,7 @@ import { test, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Window } from "happy-dom";
 
-// Phase 3: the JS detector + enableDetectors registry. The pure stall-drift helper is tested
+// The JS detector + enableDetectors registry. The pure stall-drift helper is tested
 // directly; the listener wiring is exercised via happy-dom (node --test isolates this file's
 // globals from the plain-Node smoke test). The setInterval watchdog itself is covered by the
 // pure helper + the demo, not by faking time here.
