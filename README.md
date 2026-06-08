@@ -77,13 +77,22 @@ live event):
 ## API
 
 `init(options?)`, `breadcrumb(msg, data?)`, `wrap(name, fn, makeData?)` (breadcrumb an async
-operation's start/ok/error), `setSnapshot(state)`, `attachGPUDevice(device)`, and `teardown()`
+operation's start/ok/error), `setSnapshot(state)`, `attachGPUDevice(device)`,
+`reportMemoryPressure(info?)` (report app-computed pressure), and `teardown()`
 (plus `clearRecovered()` to drop the recovered record once handled, and `getStatus()` /
 `getActiveOptions()` for introspection. Note that `getStatus()` also returns a `warnings` array of
-in-session memory-pressure / device-loss events). Three detectors:
-`js` (default), `webgpu`, and `wasm` enrich the breadcrumb trail; they are **enrichment only**, since
-the hard kill itself is always caught by next-load inference, never a live event. Shipped TypeScript
-types describe every option and the recovered `CrashRecord`.
+in-session memory-pressure / device-loss events). Four detectors:
+`js` (default), `webgpu`, `wasm`, and `memory` enrich the breadcrumb trail; they are **enrichment
+only**, since the hard kill itself is always caught by next-load inference, never a live event.
+Shipped TypeScript types describe every option and the recovered `CrashRecord`.
+
+**Memory pressure is detected relative to a budget**, not on fixed byte counts — so a high-memory
+machine doesn't false-positive. On Chromium the `memory` detector reads the `performance.memory`
+used/limit ratio; the `wasm`/`webgpu` growth thresholds scale to a budget
+(`memoryBudgetBytes` → `jsHeapSizeLimit` → `navigator.deviceMemory`); on iOS Safari (no memory API)
+it falls back to growth tracking. Apps can feed in precise facts via `memoryBudgetBytes`,
+`getMemoryEstimate`, or `reportMemoryPressure`. Severity uses the Compute Pressure vocabulary
+(`nominal`/`fair`/`serious`/`critical`). See [docs/API.md](./docs/API.md#memory-pressure-detection).
 
 See the full API docs in [docs/API.md](./docs/API.md) for more.
 

@@ -11,7 +11,13 @@
 //  - wasm: track WebAssembly.Memory growth — the only memory-pressure signal on iOS (no
 //        performance.memory / measureUserAgentSpecificMemory) → onMemoryPressure.
 
-import { getWindow, unref } from "./env.js";
+import {
+  getWindow,
+  unref,
+  readJsHeap,
+  readDeviceMemoryGB,
+  measureAgentMemory,
+} from "./env.js";
 
 /**
  * @typedef {Object} DetectorContext
@@ -23,6 +29,7 @@ import { getWindow, unref } from "./env.js";
  * @typedef {Object} Detector
  * @property {() => void} stop
  * @property {(device: GPUDevice) => void} [attachGPUDevice]
+ * @property {(now: number) => void} [sample] Drive one sampler tick (memory sampler; for tests).
  */
 
 /** Watchdog cadence + the lateness past it that we treat as a main-thread stall. */
@@ -42,6 +49,130 @@ const GPU_BURST_BYTES = 256 * 1048576;
 const WASM_GROWTH_MS = 2000;
 const WASM_FLOOR_BYTES = 64 * 1048576;
 const WASM_BURST_BYTES = 256 * 1048576;
+
+/**
+ * Memory-pressure severity cut-points (used/limit ratio → level). Compute-Pressure-aligned vocab
+ * (`nominal`/`fair`/`serious`/`critical`) so an app already running a `PressureObserver` can forward
+ * its `record.state` verbatim. Overridable via `options.memoryThresholds`.
+ * @type {import("./types.js").MemoryThresholds}
+ */
+export const DEFAULT_MEMORY_THRESHOLDS = {
+  fair: 0.7,
+  serious: 0.85,
+  critical: 0.95,
+};
+
+/** Severity ranking; `nominal` (0) means "no pressure" and only re-arms hysteresis (never warns). */
+export const LEVEL_RANK = { nominal: 0, fair: 1, serious: 2, critical: 3 };
+
+/** Memory-sampler cadence + the minimum gap before a still-elevated level may re-fire. */
+const MEMORY_SAMPLE_MS = 2000;
+export const MEMORY_REFIRE_MS = 30000;
+
+/**
+ * Budget fractions for the absolute byte thresholds. When a budget signal exists (an app-supplied
+ * `memoryBudgetBytes`, else `performance.memory.jsHeapSizeLimit`, else `navigator.deviceMemory`),
+ * the WASM/GPU growth thresholds become a fraction of that budget instead of a fixed 64/256 MB — so
+ * a big machine stops false-positiving on routine allocations. With NO budget signal (iOS Safari)
+ * the fixed bytes are kept unchanged. Overridable via `options.memoryThresholds`.
+ */
+const WASM_FLOOR_FRACTION = 0.25;
+const WASM_BURST_FRACTION = 0.5;
+const GPU_FLOOR_FRACTION = 0.25;
+const GPU_BURST_FRACTION = 0.5;
+
+/**
+ * Map a used/budget ratio to a severity level. Pure (unit-tested directly).
+ * @param {number} ratio
+ * @param {{ fair?: number, serious?: number, critical?: number }} [thresholds]
+ * @returns {"nominal" | "fair" | "serious" | "critical"}
+ */
+export const ratioToLevel = (ratio, thresholds = DEFAULT_MEMORY_THRESHOLDS) => {
+  const critical = thresholds.critical ?? 0.95;
+  const serious = thresholds.serious ?? 0.85;
+  const fair = thresholds.fair ?? 0.7;
+  if (ratio >= critical) {
+    return "critical";
+  }
+  if (ratio >= serious) {
+    return "serious";
+  }
+  if (ratio >= fair) {
+    return "fair";
+  }
+  return "nominal";
+};
+
+/** @param {string} [level] @returns {number} */
+export const levelRank = (level) =>
+  level && level in LEVEL_RANK
+    ? LEVEL_RANK[/** @type {keyof typeof LEVEL_RANK} */ (level)]
+    : 0;
+
+/**
+ * Resolve the memory budget (denominator for pressure ratios + the absolute-threshold scaler).
+ * Precedence: app-declared `memoryBudgetBytes` → `performance.memory.jsHeapSizeLimit` →
+ * `navigator.deviceMemory` (GB) → `null` (no signal, e.g. iOS Safari). Pure-ish (reads guarded
+ * globals via env.js). The app value wins because the browser numbers are coarse or clamped.
+ * @param {{ memoryBudgetBytes?: number }} opts
+ * @returns {number | null}
+ */
+export const resolveBudgetBytes = (opts) => {
+  const declared = opts && opts.memoryBudgetBytes;
+  if (typeof declared === "number" && declared > 0) {
+    return declared;
+  }
+  const heap = readJsHeap();
+  if (heap && heap.limitBytes > 0) {
+    return heap.limitBytes;
+  }
+  const gb = readDeviceMemoryGB();
+  if (typeof gb === "number" && gb > 0) {
+    return gb * 1073741824;
+  }
+  return null;
+};
+
+/**
+ * Scale an absolute byte threshold to a budget. `null` budget (no signal) returns the fixed floor
+ * unchanged (preserves iOS behavior). Otherwise returns `max(fixed, budget * fraction)` — the
+ * `max` guarantees we only ever get *quieter* on big machines, never noisier on small ones. Pure.
+ * @param {number | null} budgetBytes
+ * @param {number} fraction
+ * @param {number} fixedFloorBytes
+ * @returns {number}
+ */
+export const scaledFloorBytes = (budgetBytes, fraction, fixedFloorBytes) =>
+  budgetBytes == null
+    ? fixedFloorBytes
+    : Math.max(fixedFloorBytes, Math.round(budgetBytes * fraction));
+
+/**
+ * Hysteresis gate shared by the sampler, the heartbeat pull source, and the central emitter — so a
+ * level that holds steady warns once (not every tick). Fires on a RISING level, or on a steady
+ * elevated level once `refireMs` has elapsed (so sustained pressure still leaves periodic markers
+ * rather than going silent forever). A drop to `nominal` (rank 0) re-arms. Mutates `state` in place
+ * on a fire/re-arm. Pure aside from that mutation (unit-tested directly).
+ * @param {number} rank
+ * @param {number} now
+ * @param {{ lastRank: number, lastFireTs: number }} state
+ * @param {number} refireMs
+ * @returns {boolean}
+ */
+export const shouldFirePressure = (rank, now, state, refireMs) => {
+  if (rank === 0) {
+    state.lastRank = 0;
+    return false;
+  }
+  const rising = rank > state.lastRank;
+  const stale = rank === state.lastRank && now - state.lastFireTs >= refireMs;
+  if (!rising && !stale) {
+    return false;
+  }
+  state.lastRank = rank;
+  state.lastFireTs = now;
+  return true;
+};
 
 /**
  * Lateness of a watchdog tick — how long the main thread was blocked beyond the interval.
@@ -141,6 +272,22 @@ const createWebgpuDetector = (ctx) => {
   let stopped = false;
   /** @type {Array<() => void>} */
   const teardowns = [];
+
+  // Budget-relative thresholds: on a machine with a known budget, a 64/256 MB commit is noise, so
+  // scale the activity floor/burst up. With no budget signal (iOS) the fixed bytes are kept.
+  const budget = resolveBudgetBytes(ctx.options);
+  const memThresholds =
+    ctx.options.memoryThresholds || DEFAULT_MEMORY_THRESHOLDS;
+  const gpuFloor = scaledFloorBytes(
+    budget,
+    memThresholds.gpuFloorFraction ?? GPU_FLOOR_FRACTION,
+    GPU_FLOOR_BYTES,
+  );
+  const gpuBurst = scaledFloorBytes(
+    budget,
+    memThresholds.gpuBurstFraction ?? GPU_BURST_FRACTION,
+    GPU_BURST_BYTES,
+  );
 
   /** @param {{ reason?: string }} info */
   const fireImminent = (info) => {
@@ -266,7 +413,7 @@ const createWebgpuDetector = (ctx) => {
       let pendingSubmits = 0;
       let committedMB = 0;
       const flushActivity = () => {
-        if (pendingBytes < GPU_FLOOR_BYTES) {
+        if (pendingBytes < gpuFloor) {
           pendingBytes = 0;
           pendingSubmits = 0;
           return;
@@ -286,7 +433,7 @@ const createWebgpuDetector = (ctx) => {
         try {
           const data = args[2];
           pendingBytes += (data && (data.byteLength || data.length)) || 0;
-          if (pendingBytes >= GPU_BURST_BYTES) {
+          if (pendingBytes >= gpuBurst) {
             flushActivity();
           }
         } catch {
@@ -385,11 +532,27 @@ const createWasmDetector = (ctx) => {
   let pendingBytes = 0;
   let committedMB = 0;
 
-  const firePressure = () => {
+  // Budget-relative thresholds (see createWebgpuDetector). `null` budget (iOS) keeps fixed bytes.
+  const budget = resolveBudgetBytes(ctx.options);
+  const memThresholds =
+    ctx.options.memoryThresholds || DEFAULT_MEMORY_THRESHOLDS;
+  const wasmFloor = scaledFloorBytes(
+    budget,
+    memThresholds.wasmFloorFraction ?? WASM_FLOOR_FRACTION,
+    WASM_FLOOR_BYTES,
+  );
+  const wasmBurst = scaledFloorBytes(
+    budget,
+    memThresholds.wasmBurstFraction ?? WASM_BURST_FRACTION,
+    WASM_BURST_BYTES,
+  );
+
+  /** @param {import("./types.js").MemoryPressureInfo} info */
+  const firePressure = (info) => {
     const cb = ctx.options.onMemoryPressure;
     if (cb) {
       try {
-        cb();
+        cb(info);
       } catch {
         // a throwing app callback must not break the detector
       }
@@ -397,7 +560,7 @@ const createWasmDetector = (ctx) => {
   };
 
   const flush = () => {
-    if (pendingBytes < WASM_FLOOR_BYTES) {
+    if (pendingBytes < wasmFloor) {
       pendingBytes = 0;
       return;
     }
@@ -406,7 +569,14 @@ const createWasmDetector = (ctx) => {
       signal: "memory-near-cap",
       committedMB,
     });
-    firePressure();
+    // WASM growth can't compute a true used/budget ratio (it only sees its own linear memory), so
+    // be honest: report a coarse "serious" with committed bytes, not a fabricated ratio.
+    firePressure({
+      source: "wasm-growth",
+      level: "serious",
+      committedBytes: committedMB * 1048576,
+      budgetBytes: budget,
+    });
     pendingBytes = 0;
   };
 
@@ -426,7 +596,12 @@ const createWasmDetector = (ctx) => {
         ctx.breadcrumb(`wasm memory.grow failed: ${name}`, {
           signal: "memory-near-cap",
         });
-        firePressure();
+        // A failed grow IS out-of-memory — the strongest signal, fired unconditionally (unscaled).
+        firePressure({
+          source: "wasm-growth",
+          level: "critical",
+          budgetBytes: budget,
+        });
       } else {
         const bytes = this.buffer.byteLength;
         const prev = sizes.get(this) || 0;
@@ -434,7 +609,7 @@ const createWasmDetector = (ctx) => {
           pendingBytes += bytes - prev;
           sizes.set(this, bytes);
         }
-        if (pendingBytes >= WASM_BURST_BYTES) {
+        if (pendingBytes >= wasmBurst) {
           flush();
         }
       }
@@ -472,14 +647,125 @@ const createWasmDetector = (ctx) => {
 };
 
 /**
- * Detector factories by name. All three are registered; an unknown name is a noted no-op (a
- * breadcrumb), never a throw.
+ * Memory sampler. The budget-relative counterpart to the WASM/GPU growth detectors: on Chromium it
+ * polls `performance.memory` (cheap, sync) each cadence and reports a leveled `onMemoryPressure`
+ * when the used/limit ratio crosses a threshold — the only *real* (not growth-proxy) pressure signal
+ * the platform offers. Where `performance.memory` is absent (iOS Safari, Firefox, Node) it's a
+ * no-op, so the WASM detector remains the fallback there. Hysteresis (`shouldFirePressure`) keeps a
+ * steady level from spamming; an infrequent `measureUserAgentSpecificMemory()` cross-check enriches
+ * the next fire with a cross-worker total when available. Allocation-light: the hot path is two
+ * reads + a divide + a compare; an info object is built only on a fire.
+ * @param {DetectorContext} ctx
+ * @returns {Detector}
+ */
+const createMemorySampler = (ctx) => {
+  if (!readJsHeap()) {
+    return { stop() {} }; // no performance.memory → nothing to sample (iOS/Firefox/Node)
+  }
+  let stopped = false;
+  const thresholds = ctx.options.memoryThresholds || DEFAULT_MEMORY_THRESHOLDS;
+  const sampleMs = ctx.options.memorySampleMs ?? MEMORY_SAMPLE_MS;
+  const gate = { lastRank: 0, lastFireTs: 0 };
+  let lastAgentTs = 0;
+  /** @type {number | null} */
+  let agentBytes = null;
+
+  /** Infrequent, fire-and-forget cross-check; result enriches the NEXT fire. @param {number} now */
+  const maybeMeasureAgent = (now) => {
+    if (now - lastAgentTs < MEMORY_REFIRE_MS) {
+      return;
+    }
+    lastAgentTs = now;
+    measureAgentMemory()
+      .then((bytes) => {
+        if (!stopped && typeof bytes === "number") {
+          agentBytes = bytes;
+        }
+      })
+      .catch(() => {});
+  };
+
+  /** @param {number} now */
+  const sample = (now) => {
+    const heap = readJsHeap();
+    if (!heap || !(heap.limitBytes > 0)) {
+      return;
+    }
+    const ratio = heap.usedBytes / heap.limitBytes;
+    const level = ratioToLevel(ratio, thresholds);
+    const rank = levelRank(level);
+    if (!shouldFirePressure(rank, now, gate, MEMORY_REFIRE_MS)) {
+      if (rank > 0) {
+        maybeMeasureAgent(now); // elevated but throttled — keep the cross-check warm
+      }
+      return;
+    }
+    ctx.breadcrumb(
+      `memory pressure: ${level} (${Math.round(ratio * 100)}% of heap limit)`,
+      {
+        signal: "memory-near-cap",
+        level,
+        ratio: Math.round(ratio * 1000) / 1000,
+        usedBytes: heap.usedBytes,
+        limitBytes: heap.limitBytes,
+        source: "performance.memory",
+        ...(agentBytes != null ? { agentMemoryBytes: agentBytes } : {}),
+      },
+    );
+    firePressureCb(ctx, {
+      source: "performance.memory",
+      level,
+      ratio,
+      usedBytes: heap.usedBytes,
+      limitBytes: heap.limitBytes,
+      ...(agentBytes != null ? { agentMemoryBytes: agentBytes } : {}),
+    });
+    maybeMeasureAgent(now);
+  };
+
+  const timer = setInterval(() => {
+    if (!stopped) {
+      sample(Date.now());
+    }
+  }, sampleMs);
+  unref(timer);
+
+  return {
+    // Exposed for direct unit tests (drive a tick without waiting on the timer).
+    sample,
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
+};
+
+/**
+ * Invoke `onMemoryPressure` defensively (a throwing app callback must not break a detector).
+ * @param {DetectorContext} ctx
+ * @param {import("./types.js").MemoryPressureInfo} info
+ */
+const firePressureCb = (ctx, info) => {
+  const cb = ctx.options.onMemoryPressure;
+  if (cb) {
+    try {
+      cb(info);
+    } catch {
+      // swallow — enrichment must never break the host app
+    }
+  }
+};
+
+/**
+ * Detector factories by name. All are registered; an unknown name is a noted no-op (a breadcrumb),
+ * never a throw.
  * @type {Partial<Record<import("./types.js").DetectorName, (ctx: DetectorContext) => Detector>>}
  */
 const REGISTRY = {
   js: createJsDetector,
   webgpu: createWebgpuDetector,
   wasm: createWasmDetector,
+  memory: createMemorySampler,
 };
 
 /**

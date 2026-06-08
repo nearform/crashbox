@@ -208,7 +208,7 @@ $ npx serve
       // load is captured synchronously, ready to show at the top of the page.
       let recoveredRecord = null;
       crashbox.init({
-        detectors: ["webgpu", "wasm", "js"],
+        detectors: ["webgpu", "wasm", "js", "memory"],
         debug: true, // attaches window.__crashbox (.dump/.clear/.recovered) for laptop Safari
         onCrashRecovered(record) {
           recoveredRecord = record;
@@ -359,6 +359,19 @@ $ npx serve
             }
           };
           grow();
+        };
+        const reportPressure = () => {
+          // App-declared pressure (the reportMemoryPressure escape hatch): flows into the same
+          // warnings buffer + memory-near-cap breadcrumb as auto-detected pressure, so it shows
+          // live below and would recover as "oom" if a hard kill followed.
+          note("trigger: app reportMemoryPressure({ level: 'critical' })");
+          crashbox.reportMemoryPressure({
+            level: "critical",
+            source: "app",
+            usedBytes: 900 * 1048576,
+            limitBytes: 1024 * 1048576,
+          });
+          setStatus(crashbox.getStatus());
         };
         const jsHeapExhaustion = () => {
           note("trigger: JS heap exhaustion (may hard-kill the tab)");
@@ -522,6 +535,17 @@ ${recovered.breadcrumbs
                   ? "unsupported (iOS Safari)"
                   : memMB + " MB"}
               </p>
+              <strong>live session warnings</strong>
+              <pre>
+${(status?.warnings ?? [])
+                  .map((w) => {
+                    const when = new Date(w.t).toLocaleTimeString();
+                    const lvl = w.info?.level ? ` ${w.info.level}` : "";
+                    const src = w.info?.source ? ` (${w.info.source})` : "";
+                    return `${when}  ${w.kind}${lvl}${src}`;
+                  })
+                  .join("\n") || "(no warnings this session)"}</pre
+              >
               <strong>capabilities</strong>
               <pre>${JSON.stringify(CAPABILITIES, null, 2)}</pre>
               <strong>recent actions</strong>
@@ -624,6 +648,11 @@ ${recovered.breadcrumbs
                   label="JS heap exhaustion"
                   kind="kill"
                   onClick=${jsHeapExhaustion}
+                />
+                <${Trigger}
+                  label="Report memory pressure (app-declared)"
+                  kind="catchable"
+                  onClick=${reportPressure}
                 />
               </div>
             </div>

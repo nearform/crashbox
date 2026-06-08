@@ -33,8 +33,43 @@
  */
 
 /**
- * Which detectors to enable. `js` is the default; `webgpu`/`wasm` are opt-in.
- * @typedef {"webgpu" | "wasm" | "js"} DetectorName
+ * Which detectors to enable. `js` is the default; `webgpu`/`wasm`/`memory` are opt-in. `memory`
+ * polls `performance.memory` (Chromium only — a no-op elsewhere).
+ * @typedef {"webgpu" | "wasm" | "js" | "memory"} DetectorName
+ */
+
+/**
+ * Memory-pressure severity. Compute-Pressure-API-aligned (`PressureObserver` `record.state`), so an
+ * app already observing pressure can forward its state verbatim. `nominal` = no pressure.
+ * @typedef {"nominal" | "fair" | "serious" | "critical"} PressureLevel
+ */
+
+/**
+ * Tuning for memory-pressure detection. All optional — unset keys keep the defaults.
+ * @typedef {Object} MemoryThresholds
+ * @property {number} [fair]     used/budget ratio that reports `fair`. Default 0.7.
+ * @property {number} [serious]  used/budget ratio that reports `serious`. Default 0.85.
+ * @property {number} [critical] used/budget ratio that reports `critical`. Default 0.95.
+ * @property {number} [wasmFloorFraction] WASM growth floor as a fraction of budget. Default 0.25.
+ * @property {number} [wasmBurstFraction] WASM growth burst as a fraction of budget. Default 0.5.
+ * @property {number} [gpuFloorFraction]  GPU activity floor as a fraction of budget. Default 0.25.
+ * @property {number} [gpuBurstFraction]  GPU activity burst as a fraction of budget. Default 0.5.
+ */
+
+/**
+ * Structured payload carried on a memory-pressure event (the `onMemoryPressure` arg + the recorded
+ * `Warning.info`). All fields optional so a zero-arg `onMemoryPressure()` and a bare
+ * `reportMemoryPressure()` both stay valid.
+ * @typedef {Object} MemoryPressureInfo
+ * @property {PressureLevel} [level]    Severity. Defaults to `serious` when not derivable.
+ * @property {string} [source]          Who reported it ("performance.memory" | "wasm-growth" |
+ *                                      "sampler" | "app").
+ * @property {number} [usedBytes]       Current usage (sampler/app-reported).
+ * @property {number} [limitBytes]      Effective budget the usage was compared against.
+ * @property {number} [ratio]           usedBytes/limitBytes, if computable.
+ * @property {number} [committedBytes]  WASM committed linear memory (growth detector).
+ * @property {number | null} [budgetBytes] Resolved budget at detection time.
+ * @property {number} [agentMemoryBytes]   measureUserAgentSpecificMemory() total, if available.
  */
 
 /**
@@ -50,8 +85,19 @@
  * @property {boolean} [debug]             Attach a `window.__crashbox` debug handle. Off by
  *                                         default — opt-in so the SDK never pollutes a host's
  *                                         namespace unless asked.
+ * @property {number} [memoryBudgetBytes]  App-declared total memory budget (e.g. web-llm's
+ *                                         `vram_required_MB * 1048576`). The denominator for
+ *                                         pressure ratios and the scaler for the WASM/GPU
+ *                                         thresholds; overrides the weaker auto-detected limits.
+ * @property {number} [memorySampleMs]     `memory` detector cadence, ms. Default 2000.
+ * @property {MemoryThresholds} [memoryThresholds] Override pressure cut-points / threshold fractions.
+ * @property {() => (number | { usedBytes: number, limitBytes?: number } | null | undefined)} [getMemoryEstimate]
+ *                                         Pull source polled on the heartbeat: return current used
+ *                                         bytes (or a {usedBytes,limitBytes} pair), or null/undefined
+ *                                         to skip. Must be cheap & synchronous. Compared against the
+ *                                         budget to emit a leveled memory-pressure event.
  * @property {(record: CrashRecord) => void} [onCrashRecovered]
- * @property {() => void} [onMemoryPressure]
+ * @property {(info?: MemoryPressureInfo) => void} [onMemoryPressure]
  * @property {(info: { reason?: string }) => void} [onDeviceLossImminent]
  */
 
