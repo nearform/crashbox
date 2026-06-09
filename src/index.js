@@ -7,7 +7,15 @@
 
 import { RingBuffer, serializeSnapshot, parseSnapshot } from "./blackbox.js";
 import { classifyLoad, classifyReason } from "./inference.js";
-import { enableDetectors } from "./detectors.js";
+import {
+  enableDetectors,
+  resolveBudgetBytes,
+  ratioToLevel,
+  levelRank,
+  shouldFirePressure,
+  DEFAULT_MEMORY_THRESHOLDS,
+  MEMORY_REFIRE_MS,
+} from "./detectors.js";
 import { attachDebugHandle, detachDebugHandle } from "./debug.js";
 import {
   getStorage,
@@ -52,6 +60,7 @@ export const DEFAULTS = {
   snapshotMaxBytes: 32768,
   detectors: ["js"],
   retentionMs: 7 * 24 * 60 * 60 * 1000,
+  memoryThresholds: DEFAULT_MEMORY_THRESHOLDS,
 };
 
 /**
@@ -101,6 +110,125 @@ const pushWarning = (/** @type {Warning} */ w) => {
   if (warnings.length > WARNINGS_CAP) {
     warnings.splice(0, warnings.length - WARNINGS_CAP);
   }
+};
+
+// --- memory pressure --------------------------------------------------------
+
+/**
+ * Cross-source hysteresis state for the central memory-pressure emitter. Shared by the detectors,
+ * the heartbeat pull source, and `reportMemoryPressure`, so a level that holds steady warns once
+ * (not on every signal). Reset on every `init`.
+ */
+const pressureGate = { lastRank: 0, lastFireTs: 0 };
+
+/**
+ * Fill in a {@link MemoryPressureInfo}: default the source, derive `ratio` from `usedBytes` vs the
+ * effective budget (info-supplied limit → app budget → jsHeapSizeLimit → deviceMemory), then derive
+ * `level` from that ratio — falling back to "serious" when no ratio is knowable.
+ * @param {import("./types.js").MemoryPressureInfo} info
+ * @param {string} fallbackSource
+ * @returns {import("./types.js").MemoryPressureInfo}
+ */
+const normalizeInfo = (info, fallbackSource) => {
+  const out = { ...info };
+  if (!out.source) {
+    out.source = fallbackSource;
+  }
+  const thresholds =
+    (active && active.memoryThresholds) || DEFAULT_MEMORY_THRESHOLDS;
+  if (out.ratio == null && typeof out.usedBytes === "number") {
+    const limit =
+      typeof out.limitBytes === "number"
+        ? out.limitBytes
+        : resolveBudgetBytes(active || {});
+    if (limit && limit > 0) {
+      out.ratio = out.usedBytes / limit;
+      if (out.limitBytes == null) {
+        out.limitBytes = limit;
+      }
+    }
+  }
+  if (!out.level) {
+    out.level =
+      out.ratio != null ? ratioToLevel(out.ratio, thresholds) : "serious";
+  }
+  return out;
+};
+
+/**
+ * The single sink for ALL memory pressure (detectors, the heartbeat pull source, and the app's
+ * `reportMemoryPressure`). Applies hysteresis (rising-edge, with a periodic re-fire so sustained
+ * pressure still leaves markers); then records a {@link Warning} (queryable via `getStatus`),
+ * optionally drops an `oom`-signalling breadcrumb (skipped when a detector already breadcrumbed its
+ * own descriptive crumb), and invokes the user's `onMemoryPressure(info)`.
+ * @param {import("./types.js").MemoryPressureInfo} info  Already normalized.
+ * @param {{ skipBreadcrumb?: boolean }} [opts]
+ * @returns {void}
+ */
+const emitMemoryPressure = (info, opts = {}) => {
+  const rank = levelRank(info.level);
+  if (!shouldFirePressure(rank, Date.now(), pressureGate, MEMORY_REFIRE_MS)) {
+    return;
+  }
+  if (!opts.skipBreadcrumb) {
+    const pct = info.ratio != null ? ` (${Math.round(info.ratio * 100)}%)` : "";
+    breadcrumb(`memory pressure: ${info.level}${pct}`, {
+      signal: "memory-near-cap",
+      level: info.level,
+      ...(info.source ? { source: info.source } : {}),
+      ...(info.ratio != null
+        ? { ratio: Math.round(info.ratio * 1000) / 1000 }
+        : {}),
+      ...(typeof info.usedBytes === "number"
+        ? { usedBytes: info.usedBytes }
+        : {}),
+    });
+  }
+  pushWarning({ t: Date.now(), kind: "memory-pressure", info: { ...info } });
+  if (active && active.onMemoryPressure) {
+    try {
+      active.onMemoryPressure(info);
+    } catch {
+      // a throwing app callback must not break us
+    }
+  }
+};
+
+/**
+ * Heartbeat pull source: poll the app's `getMemoryEstimate` (cheap & synchronous), normalize the
+ * result, and route it through {@link emitMemoryPressure}. No-op unless `getMemoryEstimate` is set;
+ * a throwing estimator is swallowed so it can't break the heartbeat.
+ * @returns {void}
+ */
+const sampleMemoryEstimate = () => {
+  if (!active || !active.getMemoryEstimate) {
+    return;
+  }
+  let raw;
+  try {
+    raw = active.getMemoryEstimate();
+  } catch {
+    return; // a throwing estimator must not break the heartbeat
+  }
+  if (raw == null) {
+    return;
+  }
+  /** @type {import("./types.js").MemoryPressureInfo} */
+  let info;
+  if (typeof raw === "number") {
+    info = { source: "sampler", usedBytes: raw };
+  } else if (typeof raw === "object" && typeof raw.usedBytes === "number") {
+    info = {
+      source: "sampler",
+      usedBytes: raw.usedBytes,
+      ...(typeof raw.limitBytes === "number"
+        ? { limitBytes: raw.limitBytes }
+        : {}),
+    };
+  } else {
+    return;
+  }
+  emitMemoryPressure(normalizeInfo(info, "sampler"));
 };
 
 // --- persistence ------------------------------------------------------------
@@ -169,6 +297,7 @@ const startHeartbeat = () => {
     if (recorder) {
       recorder.lastSeen = Date.now();
       persist();
+      sampleMemoryEstimate();
     }
   }, active.heartbeatMs);
   // Don't keep a Node test process alive on the timer (no-op in the browser).
@@ -341,6 +470,8 @@ export const init = (options = {}) => {
   stopHeartbeat();
   stopDetectors();
   warnings = [];
+  pressureGate.lastRank = 0;
+  pressureGate.lastFireTs = 0;
 
   // 1. Recover the previous session before we overwrite the "current" pointer, then sweep
   //    orphaned records (from tabs that never reopened) past the retention window.
@@ -383,21 +514,17 @@ export const init = (options = {}) => {
   //    Warning callbacks are wrapped so every fire is also recorded in the live `warnings`
   //    buffer (queryable via getStatus()), with the user's original callback invoked after.
   //    `active` itself is left unmodified so getActiveOptions() returns what the user passed.
-  const userMemoryPressure = active.onMemoryPressure;
   const userDeviceLossImminent = active.onDeviceLossImminent;
   /** @type {ResolvedOptions} */
   const detectorOptions = {
     ...active,
-    onMemoryPressure: () => {
-      pushWarning({ t: Date.now(), kind: "memory-pressure" });
-      if (userMemoryPressure) {
-        try {
-          userMemoryPressure();
-        } catch {
-          // a throwing app callback must not break the detector
-        }
-      }
-    },
+    // Detectors fire here; route through the central emitter (hysteresis + Warning + the user's
+    // onMemoryPressure). `skipBreadcrumb` because each detector already drops its own descriptive
+    // `memory-near-cap` crumb for crash inference.
+    onMemoryPressure: (info) =>
+      emitMemoryPressure(normalizeInfo(info || {}, "sampler"), {
+        skipBreadcrumb: true,
+      }),
     onDeviceLossImminent: (info) => {
       pushWarning({
         t: Date.now(),
@@ -428,6 +555,7 @@ export const init = (options = {}) => {
         breadcrumb,
         setSnapshot,
         attachGPUDevice,
+        reportMemoryPressure,
         clearRecovered,
         getActiveOptions,
         getStatus,
@@ -481,6 +609,24 @@ export const setSnapshot = (state) => {
   // Store a detached JSON clone so later app-side mutation doesn't leak into the box.
   recorder.snapshot = parseSnapshot(json);
   persist();
+};
+
+/**
+ * Report memory pressure the APP computed itself — for spikes between heartbeat ticks that
+ * `getMemoryEstimate` would miss (a caught OOM, an allocation failure, a runtime's own pressure
+ * event). Flows into the SAME sinks as auto-detected pressure: records a {@link Warning} (live via
+ * `getStatus().warnings`), drops a `memory-near-cap` breadcrumb (so a hard kill that follows
+ * recovers as reason `oom`), and invokes `onMemoryPressure(info)` — all subject to the shared
+ * hysteresis. When `usedBytes` is given without an explicit `level`, the level is derived from the
+ * budget/thresholds. No-op before `init`.
+ * @param {import("./types.js").MemoryPressureInfo} [info]
+ * @returns {void}
+ */
+export const reportMemoryPressure = (info = {}) => {
+  if (!recorder || !active) {
+    return; // pre-init no-op
+  }
+  emitMemoryPressure(normalizeInfo(info, "app"));
 };
 
 /**

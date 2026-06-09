@@ -178,6 +178,34 @@ $ npx serve
         background: #2d3748;
         color: #ffffff;
       }
+      /* Code area with a copy button tucked into its top-right corner. */
+      .code-block {
+        position: relative;
+      }
+      .copy-button {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border: 1px solid #d4d4d8;
+        background: #ffffff;
+        border-radius: 6px;
+        font-size: 1.1em;
+        color: #4a5568;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .copy-button:hover {
+        background: #edf2f7;
+        color: #2d3748;
+      }
     </style>
     <title>crashbox Demo</title>
   </head>
@@ -208,7 +236,7 @@ $ npx serve
       // load is captured synchronously, ready to show at the top of the page.
       let recoveredRecord = null;
       crashbox.init({
-        detectors: ["webgpu", "wasm", "js"],
+        detectors: ["webgpu", "wasm", "js", "memory"],
         debug: true, // attaches window.__crashbox (.dump/.clear/.recovered) for laptop Safari
         onCrashRecovered(record) {
           recoveredRecord = record;
@@ -278,15 +306,57 @@ $ npx serve
         </button>
       `;
 
-      // Inline JSON dump for the debug pane. `payload` null/empty renders an italic "nothing" line.
+      // Copy `text` to the clipboard with a brief check-mark affordance. Falls back to a
+      // hidden textarea + execCommand for non-secure contexts / older Safari without the API.
+      const CopyButton = ({ text }) => {
+        const [copied, setCopied] = useState(false);
+        const copy = useCallback(async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+              document.execCommand("copy");
+            } catch {
+              /* clipboard unavailable — nothing else to do */
+            }
+            ta.remove();
+          }
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }, [text]);
+        return html`<button
+          type="button"
+          className="copy-button"
+          onClick=${copy}
+          aria-label="Copy to clipboard"
+          title=${copied ? "Copied!" : "Copy"}
+        >
+          <i className=${"ph " + (copied ? "ph-check" : "ph-copy")}></i>
+        </button>`;
+      };
+
+      // Inline JSON dump for the debug pane. `payload` null/empty renders an italic "nothing" line;
+      // otherwise the code area carries a copy button overlaid in its top-right corner.
       const isEmpty = (v) =>
         v == null || (typeof v === "object" && Object.keys(v).length === 0);
-      const InlineView = ({ view }) =>
-        isEmpty(view.payload)
-          ? html`<p style=${{ color: "#777", fontStyle: "italic" }}>
-              No data for "${view.label}" — nothing to show.
-            </p>`
-          : html`<pre>${JSON.stringify(view.payload, null, 2)}</pre>`;
+      const InlineView = ({ view }) => {
+        if (isEmpty(view.payload)) {
+          return html`<p style=${{ color: "#777", fontStyle: "italic" }}>
+            No data for "${view.label}" — nothing to show.
+          </p>`;
+        }
+        const text = JSON.stringify(view.payload, null, 2);
+        return html`<div className="code-block">
+          <${CopyButton} text=${text} />
+          <pre>${text}</pre>
+        </div>`;
+      };
 
       const App = () => {
         const [counter, setCounter] = useState(0);
@@ -359,6 +429,19 @@ $ npx serve
             }
           };
           grow();
+        };
+        const reportPressure = () => {
+          // App-declared pressure (the reportMemoryPressure escape hatch): flows into the same
+          // warnings buffer + memory-near-cap breadcrumb as auto-detected pressure, so it shows
+          // live below and would recover as "oom" if a hard kill followed.
+          note("trigger: app reportMemoryPressure({ level: 'critical' })");
+          crashbox.reportMemoryPressure({
+            level: "critical",
+            source: "app",
+            usedBytes: 900 * 1048576,
+            limitBytes: 1024 * 1048576,
+          });
+          setStatus(crashbox.getStatus());
         };
         const jsHeapExhaustion = () => {
           note("trigger: JS heap exhaustion (may hard-kill the tab)");
@@ -448,6 +531,15 @@ $ npx serve
           }
         };
 
+        // Wipe crashbox's localStorage keys via the debug handle (reset between trials), then
+        // clear the open dump view and refresh status so the page reflects the empty store.
+        const resetCrashbox = () => {
+          const removed = window.__crashbox?.clear() ?? [];
+          note(`reset crashbox (cleared ${removed.length} storage key(s))`);
+          setInlineView(null);
+          setStatus(crashbox.getStatus());
+        };
+
         const recovered = recoveredRecord;
 
         return html`
@@ -522,6 +614,17 @@ ${recovered.breadcrumbs
                   ? "unsupported (iOS Safari)"
                   : memMB + " MB"}
               </p>
+              <strong>live session warnings</strong>
+              <pre>
+${(status?.warnings ?? [])
+                  .map((w) => {
+                    const when = new Date(w.t).toLocaleTimeString();
+                    const lvl = w.info?.level ? ` ${w.info.level}` : "";
+                    const src = w.info?.source ? ` (${w.info.source})` : "";
+                    return `${when}  ${w.kind}${lvl}${src}`;
+                  })
+                  .join("\n") || "(no warnings this session)"}</pre
+              >
               <strong>capabilities</strong>
               <pre>${JSON.stringify(CAPABILITIES, null, 2)}</pre>
               <strong>recent actions</strong>
@@ -542,30 +645,41 @@ ${recovered.breadcrumbs
                 <button
                   className="pure-button trigger"
                   onClick=${() =>
-                    setInlineView({
-                      label: "Full dump",
-                      payload: window.__crashbox?.dump() ?? null,
-                    })}
+                    setInlineView((cur) =>
+                      cur?.key === "dump"
+                        ? null
+                        : {
+                            key: "dump",
+                            label: "Full dump",
+                            payload: window.__crashbox?.dump() ?? null,
+                          },
+                    )}
                 >
-                  Show dump
+                  ${inlineView?.key === "dump" ? "Hide dump" : "Show dump"}
                 </button>
                 <button
                   className="pure-button trigger"
                   onClick=${() =>
-                    setInlineView({
-                      label: "Recovered crash",
-                      payload: window.__crashbox?.recovered() ?? null,
-                    })}
+                    setInlineView((cur) =>
+                      cur?.key === "recovered"
+                        ? null
+                        : {
+                            key: "recovered",
+                            label: "Recovered crash",
+                            payload: window.__crashbox?.recovered() ?? null,
+                          },
+                    )}
                 >
-                  Show recovered
+                  ${inlineView?.key === "recovered"
+                    ? "Hide recovered"
+                    : "Show recovered"}
                 </button>
-                ${inlineView !== null &&
-                html`<button
+                <button
                   className="pure-button trigger"
-                  onClick=${() => setInlineView(null)}
+                  onClick=${resetCrashbox}
                 >
-                  Hide
-                </button>`}
+                  <i className="ph ph-trash"></i> Reset crashbox
+                </button>
               </div>
               ${inlineView !== null &&
               html`<${InlineView} view=${inlineView} />`}
@@ -624,6 +738,11 @@ ${recovered.breadcrumbs
                   label="JS heap exhaustion"
                   kind="kill"
                   onClick=${jsHeapExhaustion}
+                />
+                <${Trigger}
+                  label="Report memory pressure (app-declared)"
+                  kind="catchable"
+                  onClick=${reportPressure}
                 />
               </div>
             </div>

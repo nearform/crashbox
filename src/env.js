@@ -50,6 +50,79 @@ export const getNavType = () => {
   }
 };
 
+/**
+ * JS heap usage from the non-standard `performance.memory` (Chromium only — absent on iOS Safari
+ * and Firefox). Cheap and synchronous, so it's the hot-path source for the memory sampler. The
+ * `usedBytes/limitBytes` ratio is the only real memory-pressure proxy the platform offers.
+ * (`totalJSHeapSize` is deliberately omitted — nothing consumes it, and it's not reliably present.)
+ * @returns {{ usedBytes: number, limitBytes: number } | null}
+ */
+export const readJsHeap = () => {
+  try {
+    const mem = /** @type {any} */ (
+      typeof performance !== "undefined" ? performance : undefined
+    )?.memory;
+    if (
+      mem &&
+      typeof mem.usedJSHeapSize === "number" &&
+      typeof mem.jsHeapSizeLimit === "number"
+    ) {
+      return {
+        usedBytes: mem.usedJSHeapSize,
+        limitBytes: mem.jsHeapSizeLimit,
+      };
+    }
+  } catch {
+    // performance.memory access can throw in some sandboxes
+  }
+  return null;
+};
+
+/**
+ * Approximate device RAM in GB from `navigator.deviceMemory` (Chromium only; a static, power-of-2
+ * tier clamped to 8 for fingerprint resistance). A coarse budget fallback when `performance.memory`
+ * is absent — never precise enough to be authoritative over an app-supplied budget.
+ * @returns {number | null}
+ */
+export const readDeviceMemoryGB = () => {
+  try {
+    const gb = /** @type {any} */ (
+      typeof navigator !== "undefined" ? navigator : undefined
+    )?.deviceMemory;
+    return typeof gb === "number" && gb > 0 ? gb : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Total page memory (incl. workers/iframes) via `performance.measureUserAgentSpecificMemory()`.
+ * Chromium only, async, and gated on `crossOriginIsolated` — and absent on iOS Safari even when
+ * isolated. Resolves to `null` (never rejects) when unavailable. Expensive: call infrequently and
+ * never from a hot path.
+ * @returns {Promise<number | null>}
+ */
+export const measureAgentMemory = async () => {
+  try {
+    const perf = /** @type {any} */ (
+      typeof performance !== "undefined" ? performance : undefined
+    );
+    const isolated =
+      /** @type {any} */ (globalThis).crossOriginIsolated === true;
+    if (
+      !perf ||
+      !isolated ||
+      typeof perf.measureUserAgentSpecificMemory !== "function"
+    ) {
+      return null;
+    }
+    const result = await perf.measureUserAgentSpecificMemory();
+    return result && typeof result.bytes === "number" ? result.bytes : null;
+  } catch {
+    return null; // rejects (e.g. not isolated) degrade to "no signal"
+  }
+};
+
 /** A unique session id: `crypto.randomUUID()` where available, else a timestamp+random fallback. */
 export const makeSessionId = () => {
   try {

@@ -15,13 +15,6 @@ npm test         # node --test
 npm run build    # emit dist/*.d.ts (declaration only)
 ```
 
-Use the project's Node version (`.nvmrc` → `lts/*`); the machine default may be too old. Activate
-nvm before running anything:
-
-```sh
-source ~/.nvm/nvm.sh && nvm use
-```
-
 Architecture notes and the empirical research log live in [`docs/`](.); deeper contributor notes
 (including the supply-chain dependency policy and version-control rules) are in
 [`AGENTS.md`](../AGENTS.md). The full API reference is in [`API.md`](./API.md).

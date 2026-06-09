@@ -404,6 +404,152 @@ test("a throwing user onMemoryPressure does not break the warning record", () =>
   );
 });
 
+// --- reportMemoryPressure + getMemoryEstimate -----------------------------
+
+test("reportMemoryPressure records a leveled memory-pressure warning", () => {
+  crashbox.init();
+  crashbox.reportMemoryPressure({ level: "serious", source: "app" });
+  const w = crashbox.getStatus()?.warnings ?? [];
+  assert.equal(w.length, 1);
+  assert.equal(w[0].kind, "memory-pressure");
+  assert.equal(w[0].info?.level, "serious");
+  assert.equal(w[0].info?.source, "app");
+});
+
+test("reportMemoryPressure before a hard kill recovers as reason 'oom'", () => {
+  initCapturing(); // session A
+  crashbox.reportMemoryPressure({ level: "critical" });
+  const got = initCapturing(); // session B recovers A (no clean shutdown)
+  assert.equal(got?.reason, "oom");
+});
+
+test("reportMemoryPressure: a zero-arg onMemoryPressure still fires (backward compatible)", () => {
+  let fired = 0;
+  crashbox.init({
+    onMemoryPressure: () => {
+      fired += 1;
+    },
+  });
+  crashbox.reportMemoryPressure({ level: "serious" });
+  assert.equal(fired, 1);
+  assert.equal(
+    (crashbox.getStatus()?.warnings ?? [])[0]?.info?.level,
+    "serious",
+  );
+});
+
+test("reportMemoryPressure derives the level from a budget + usedBytes", () => {
+  crashbox.init({ memoryBudgetBytes: 1000 });
+  crashbox.reportMemoryPressure({ usedBytes: 960 }); // ratio 0.96 → critical
+  const w = crashbox.getStatus()?.warnings ?? [];
+  assert.equal(w[0].info?.level, "critical");
+  assert.ok(Math.abs((Number(w[0].info?.ratio) || 0) - 0.96) < 1e-9);
+});
+
+test("reportMemoryPressure: hysteresis suppresses a repeat of the same level", () => {
+  crashbox.init();
+  crashbox.reportMemoryPressure({ level: "serious" });
+  crashbox.reportMemoryPressure({ level: "serious" }); // same level → suppressed
+  assert.equal((crashbox.getStatus()?.warnings ?? []).length, 1);
+  crashbox.reportMemoryPressure({ level: "critical" }); // rising → fires
+  assert.equal((crashbox.getStatus()?.warnings ?? []).length, 2);
+});
+
+test("reportMemoryPressure: a descent re-arms the gate so a relapse to an earlier peak warns again", () => {
+  // Regression: the gate used to latch at the all-time peak, so once 'critical' was seen, a later
+  // relapse to 'critical' (after dropping to 'serious') was silently swallowed for the session.
+  crashbox.init();
+  crashbox.reportMemoryPressure({ level: "critical" }); // 1: rising → fires
+  crashbox.reportMemoryPressure({ level: "serious" }); // descent → re-arms, no fire
+  assert.equal((crashbox.getStatus()?.warnings ?? []).length, 1);
+  crashbox.reportMemoryPressure({ level: "critical" }); // 2: rises from the lowered watermark → fires
+  const w = crashbox.getStatus()?.warnings ?? [];
+  assert.equal(w.length, 2, "the relapse to the earlier peak must warn again");
+  assert.equal(w[1].info?.level, "critical");
+});
+
+test("memory detector: a fresh episode after recovery warns again (no peak latch)", async () => {
+  // The headline regression, through the real `memory` detector + its sampling interval. Fake
+  // Chromium's `performance.memory` (absent in Node) so the detector activates, then walk usage up,
+  // back to calm, and up again — the second episode must surface even though it's below the peak.
+  const heap = { usedJSHeapSize: 100, jsHeapSizeLimit: 1000 };
+  Object.defineProperty(performance, "memory", {
+    value: heap,
+    configurable: true,
+    writable: true,
+  });
+  const levels = () =>
+    (crashbox.getStatus()?.warnings ?? []).map((w) => w.info?.level);
+  /** @param {() => boolean} pred */
+  const waitFor = async (pred) => {
+    const deadline = Date.now() + 500;
+    while (!pred() && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  };
+  try {
+    crashbox.init({ detectors: ["memory"], memorySampleMs: 5 });
+
+    heap.usedJSHeapSize = 980; // critical
+    await waitFor(() => levels().includes("critical"));
+    assert.deepEqual(levels(), ["critical"]);
+
+    heap.usedJSHeapSize = 100; // full recovery — detector forwards 'nominal', re-arming the gate
+    await new Promise((r) => setTimeout(r, 30));
+
+    heap.usedJSHeapSize = 880; // NEW serious episode, below the earlier peak
+    await waitFor(() => levels().length >= 2);
+    assert.deepEqual(
+      levels(),
+      ["critical", "serious"],
+      "the post-recovery episode must warn again",
+    );
+  } finally {
+    crashbox.teardown(); // stop the sampler so it can't leak into later tests
+    // @ts-expect-error remove the fake so it can't leak into other tests
+    delete performance.memory;
+  }
+});
+
+test("reportMemoryPressure is a safe no-op before init", () => {
+  crashbox.teardown(); // reset to pre-init
+  assert.doesNotThrow(() =>
+    crashbox.reportMemoryPressure({ level: "critical" }),
+  );
+});
+
+test("getMemoryEstimate is polled on the heartbeat and emits a leveled warning", async () => {
+  crashbox.init({
+    heartbeatMs: 10,
+    getMemoryEstimate: () => ({ usedBytes: 900, limitBytes: 1000 }), // 0.9 → serious
+  });
+  const deadline = Date.now() + 500;
+  while (
+    (crashbox.getStatus()?.warnings ?? []).length === 0 &&
+    Date.now() < deadline
+  ) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  const w = crashbox.getStatus()?.warnings ?? [];
+  assert.ok(w.length >= 1, "the pull source should have emitted a warning");
+  assert.equal(w[0].info?.level, "serious");
+  assert.equal(w[0].info?.source, "sampler");
+  crashbox.teardown(); // stop the heartbeat so it can't leak into later tests
+});
+
+test("a throwing getMemoryEstimate does not break the heartbeat", async () => {
+  crashbox.init({
+    heartbeatMs: 10,
+    getMemoryEstimate: () => {
+      throw new Error("estimator boom");
+    },
+  });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.ok(crashbox.getStatus(), "heartbeat kept the session alive");
+  assert.deepEqual(crashbox.getStatus()?.warnings, []);
+  crashbox.teardown();
+});
+
 test("retentionMs sweeps within the active namespace only", () => {
   // A stale orphan under namespace "a" should not be touched by an init in namespace "b".
   localStorage.setItem(

@@ -62,6 +62,28 @@ test("stallDriftMs: on-time or early ticks report no drift", () => {
   assert.equal(detectors.stallDriftMs(1000, 2000, 1000), 0);
 });
 
+// --- shouldReportStall (pure) ---------------------------------------------
+
+test("shouldReportStall: a foreground tick past the threshold reports", () => {
+  assert.equal(detectors.shouldReportStall(300, false, false), true);
+});
+
+test("shouldReportStall: a foreground tick under the threshold does not", () => {
+  assert.equal(detectors.shouldReportStall(100, false, false), false);
+});
+
+test("shouldReportStall: a hidden tab never reports, however large the drift", () => {
+  // Backgrounding throttles/suspends timers — that drift is not a hang.
+  assert.equal(detectors.shouldReportStall(300, true, false), false);
+  assert.equal(detectors.shouldReportStall(60000, true, false), false);
+});
+
+test("shouldReportStall: the first foreground tick after being hidden is suppressed (resume gap)", () => {
+  // iOS resume: the suspended timer fires with a huge drift before the visible event flips `hidden`
+  // back to false. `wasHidden` (set when the tab went hidden) suppresses it.
+  assert.equal(detectors.shouldReportStall(1010758, false, true), false);
+});
+
 // --- enableDetectors ------------------------------------------------------
 
 test("enableDetectors: js returns one detector with a stop()", () => {
@@ -441,4 +463,204 @@ test("wasm: stop() restores WebAssembly.Memory.prototype.grow", () => {
     0,
     "no wasm breadcrumb should fire after stop()",
   );
+});
+
+test("wasm: a large memoryBudgetBytes scales the threshold so a 300 MB grow does NOT fire (the 128 GB false-positive)", () => {
+  const { crumbs, pressure, ctx } = makeWasmCtx();
+  ctx.options.memoryBudgetBytes = 128 * 1024 * MB; // 128 GB → burst floor ~64 GB
+  live = detectors.enableDetectors(ctx);
+  const mem = new WebAssembly.Memory({ initial: 1, maximum: pages(512) });
+  mem.grow(pages(300)); // ~300 MB — was a fire at the fixed 256 MB burst, now far below scaled
+  assert.equal(
+    crumbs.filter((c) => c.msg.startsWith("wasm memory:")).length,
+    0,
+    "300 MB against a 128 GB budget is not pressure → no breadcrumb",
+  );
+  assert.equal(pressure(), 0, "onMemoryPressure should not fire");
+});
+
+// --- memory pure helpers --------------------------------------------------
+
+test("resolveBudgetBytes: an app-supplied budget wins", () => {
+  assert.equal(detectors.resolveBudgetBytes({ memoryBudgetBytes: 4096 }), 4096);
+});
+
+test("resolveBudgetBytes: falls back to performance.memory.jsHeapSizeLimit, else null", () => {
+  // No performance.memory / deviceMemory in Node → null.
+  assert.equal(detectors.resolveBudgetBytes({}), null);
+  const cleanup = fakeHeap({ usedJSHeapSize: 1, jsHeapSizeLimit: 2048 });
+  try {
+    assert.equal(detectors.resolveBudgetBytes({}), 2048);
+  } finally {
+    cleanup();
+  }
+});
+
+test("scaledFloorBytes: null budget keeps the fixed floor (iOS); a budget scales but never below it", () => {
+  assert.equal(detectors.scaledFloorBytes(null, 0.25, 64 * MB), 64 * MB);
+  assert.equal(detectors.scaledFloorBytes(8000 * MB, 0.25, 64 * MB), 2000 * MB);
+  // tiny budget: max() keeps the fixed floor so we never get noisier on small devices
+  assert.equal(detectors.scaledFloorBytes(100 * MB, 0.25, 64 * MB), 64 * MB);
+});
+
+test("ratioToLevel: maps to the Compute-Pressure vocabulary and honors overrides", () => {
+  assert.equal(detectors.ratioToLevel(0.5), "nominal");
+  assert.equal(detectors.ratioToLevel(0.72), "fair");
+  assert.equal(detectors.ratioToLevel(0.86), "serious");
+  assert.equal(detectors.ratioToLevel(0.96), "critical");
+  assert.equal(detectors.ratioToLevel(0.6, { fair: 0.5 }), "fair");
+});
+
+test("levelRank: ranks severity, unknown/absent → 0", () => {
+  assert.equal(detectors.levelRank("nominal"), 0);
+  assert.equal(detectors.levelRank("fair"), 1);
+  assert.equal(detectors.levelRank("serious"), 2);
+  assert.equal(detectors.levelRank("critical"), 3);
+  assert.equal(detectors.levelRank(undefined), 0);
+});
+
+test("shouldFirePressure: rising fires, steady is suppressed until refire, nominal re-arms", () => {
+  const state = { lastRank: 0, lastFireTs: 0 };
+  const REFIRE = 30000;
+  // rising into 'serious' (rank 2)
+  assert.equal(detectors.shouldFirePressure(2, 1000, state, REFIRE), true);
+  // same level, too soon → suppressed
+  assert.equal(detectors.shouldFirePressure(2, 5000, state, REFIRE), false);
+  // same level, past the refire window → fires again
+  assert.equal(detectors.shouldFirePressure(2, 40000, state, REFIRE), true);
+  // rising to 'critical' (rank 3) fires immediately
+  assert.equal(detectors.shouldFirePressure(3, 41000, state, REFIRE), true);
+  // dropping to nominal re-arms (no fire), then a re-rise fires
+  assert.equal(detectors.shouldFirePressure(0, 42000, state, REFIRE), false);
+  assert.equal(detectors.shouldFirePressure(1, 43000, state, REFIRE), true);
+});
+
+test("shouldFirePressure: a PARTIAL descent lowers the watermark so a re-rise re-fires (no all-time-peak latch)", () => {
+  const state = { lastRank: 0, lastFireTs: 0 };
+  const REFIRE = 30000;
+  // up to 'critical' (rank 3)
+  assert.equal(detectors.shouldFirePressure(3, 1000, state, REFIRE), true);
+  // drop to 'serious' (rank 2): does NOT fire, but the watermark follows down to 2…
+  assert.equal(detectors.shouldFirePressure(2, 2000, state, REFIRE), false);
+  assert.equal(
+    state.lastRank,
+    2,
+    "watermark tracks the current level, not the peak",
+  );
+  // …so a fresh rise back to 'critical' is a rising edge again and fires (the latch bug would
+  // have suppressed this because 3 was already the session peak).
+  assert.equal(detectors.shouldFirePressure(3, 3000, state, REFIRE), true);
+});
+
+// --- memory sampler -------------------------------------------------------
+// performance.memory is absent in Node, so fake it. Drive ticks via the exposed sample(now)
+// rather than the real interval (matches the suite's "don't fake time" convention).
+
+/**
+ * Install a fake `performance.memory`, returning a cleanup. Mutate the returned object's
+ * `usedJSHeapSize` between samples to move the ratio.
+ * @param {{ usedJSHeapSize: number, jsHeapSizeLimit: number }} mem
+ */
+const fakeHeap = (mem) => {
+  // Define the SAME object reference the caller holds, so mutating `mem.usedJSHeapSize` between
+  // samples is visible to readJsHeap().
+  Object.defineProperty(performance, "memory", {
+    value: mem,
+    configurable: true,
+    writable: true,
+  });
+  return () => {
+    // @ts-expect-error remove the fake so it can't leak into budget-resolution in other tests
+    delete performance.memory;
+  };
+};
+
+const makeMemoryCtx = () => {
+  /** @type {Array<{ msg: string, data?: Record<string, unknown> }>} */
+  const crumbs = [];
+  /** @type {import("../src/types.js").MemoryPressureInfo[]} */
+  const fires = [];
+  const ctx = {
+    /** @param {string} msg @param {Record<string, unknown>} [data] */
+    breadcrumb: (msg, data) => crumbs.push({ msg, data }),
+    options: /** @type {import("../src/types.js").ResolvedOptions} */ ({
+      heartbeatMs: 2000,
+      breadcrumbLimit: 100,
+      snapshotMaxBytes: 32768,
+      retentionMs: 604800000,
+      detectors: ["memory"],
+      onMemoryPressure: (/** @type {any} */ info) => fires.push(info),
+    }),
+  };
+  return { crumbs, fires, ctx };
+};
+
+test("memory sampler: no-op (no breadcrumb, undefined sample) when performance.memory is absent", () => {
+  const { crumbs, ctx } = makeMemoryCtx();
+  live = detectors.enableDetectors(ctx);
+  assert.equal(live.length, 1);
+  assert.equal(typeof live[0].stop, "function");
+  assert.equal(
+    live[0].sample,
+    undefined,
+    "no sample hook without a heap source",
+  );
+  assert.equal(crumbs.length, 0);
+});
+
+test("memory sampler: crosses thresholds once per rising level (hysteresis), with rich info", () => {
+  const heap = { usedJSHeapSize: 100, jsHeapSizeLimit: 1000 };
+  const cleanup = fakeHeap(heap);
+  try {
+    const { crumbs, fires, ctx } = makeMemoryCtx();
+    live = detectors.enableDetectors(ctx);
+    const sampler = live[0];
+    assert.equal(typeof sampler.sample, "function");
+
+    heap.usedJSHeapSize = 100; // ratio 0.10 → nominal
+    sampler.sample?.(1000);
+    assert.equal(fires.length, 0, "nominal does not fire");
+
+    heap.usedJSHeapSize = 880; // 0.88 → serious
+    sampler.sample?.(2000);
+    assert.equal(fires.length, 1);
+    assert.equal(fires[0].level, "serious");
+    assert.equal(fires[0].source, "performance.memory");
+    assert.ok(Math.abs((fires[0].ratio ?? 0) - 0.88) < 1e-9);
+    assert.equal(fires[0].usedBytes, 880);
+    assert.equal(fires[0].limitBytes, 1000);
+    assert.ok(crumbs.some((c) => c.data?.signal === "memory-near-cap"));
+
+    heap.usedJSHeapSize = 900; // still serious, within refire → suppressed
+    sampler.sample?.(3000);
+    assert.equal(fires.length, 1, "steady level does not re-fire");
+
+    heap.usedJSHeapSize = 980; // 0.98 → critical (rising) → fires
+    sampler.sample?.(4000);
+    assert.equal(fires.length, 2);
+    assert.equal(fires[1].level, "critical");
+
+    // Drop to nominal: the sampler forwards the descent (silently — no breadcrumb) so the shared
+    // downstream gate re-arms. A direct callback like this test's sees it; the central emitter
+    // swallows it (rank 0). This forward is what makes the *next* episode reachable.
+    heap.usedJSHeapSize = 100;
+    sampler.sample?.(5000);
+    assert.equal(fires.length, 3);
+    assert.equal(
+      fires[2].level,
+      "nominal",
+      "descent is forwarded to re-arm downstream",
+    );
+    assert.ok(
+      !crumbs.some((c) => c.msg.includes("nominal")),
+      "a descent does not breadcrumb",
+    );
+
+    heap.usedJSHeapSize = 880; // re-rise to serious → fires again (the latch-bug regression guard)
+    sampler.sample?.(6000);
+    assert.equal(fires.length, 4);
+    assert.equal(fires[3].level, "serious");
+  } finally {
+    cleanup();
+  }
 });
