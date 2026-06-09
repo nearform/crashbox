@@ -49,21 +49,20 @@ When you need a package:
 (`status`, `diff`, `log`) is fine. Finish your work, report what changed, and leave a clean working
 tree — the human handles commits. (Commits/pushes are also human-gated in `.claude/settings.json`.)
 
+## Releases & versioning — use changesets, never bump by hand
+
+Versioning and changelog are automated via **changesets** ([`.changeset/config.json`](.changeset/config.json))
+and the [release workflow](.github/workflows/release.yml). **Do NOT** manually edit
+`package.json` `version`, write or edit `CHANGELOG.md`, or run `npm version`/`git tag` — the
+changesets action owns all of that.
+
+To record a release-worthy change, add a changeset file under `.changeset/` (a markdown file with
+frontmatter naming the package + semver bump, then a summary line) — or tell the human to run
+`npx changeset`. On merge to `main`, the action opens/updates a "Version Packages" PR that bumps
+the version and writes the changelog; merging that PR publishes to npm. See
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for the walkthrough.
+
 ## Pitfalls
-
-### Use the project's Node version
-
-The default `node` on this machine is **v16**, which is too old for the toolchain
-(eslint 10, npm 11, etc.) and will produce baffling errors. Always activate nvm against
-the project's `.nvmrc` (`lts/*`) **before** running anything:
-
-```sh
-source ~/.nvm/nvm.sh && cd /PATH/TO/crashbox && nvm use
-```
-
-`nvm use` only finds `.nvmrc` when the CWD is inside the project, and each new `Bash` tool
-invocation starts a fresh shell — so re-source nvm every time, or chain it inline:
-`source ~/.nvm/nvm.sh && nvm use 2>/dev/null && <your command>`.
 
 ### `dist/` only contains `.d.ts` — that's intentional
 

@@ -62,6 +62,28 @@ test("stallDriftMs: on-time or early ticks report no drift", () => {
   assert.equal(detectors.stallDriftMs(1000, 2000, 1000), 0);
 });
 
+// --- shouldReportStall (pure) ---------------------------------------------
+
+test("shouldReportStall: a foreground tick past the threshold reports", () => {
+  assert.equal(detectors.shouldReportStall(300, false, false), true);
+});
+
+test("shouldReportStall: a foreground tick under the threshold does not", () => {
+  assert.equal(detectors.shouldReportStall(100, false, false), false);
+});
+
+test("shouldReportStall: a hidden tab never reports, however large the drift", () => {
+  // Backgrounding throttles/suspends timers — that drift is not a hang.
+  assert.equal(detectors.shouldReportStall(300, true, false), false);
+  assert.equal(detectors.shouldReportStall(60000, true, false), false);
+});
+
+test("shouldReportStall: the first foreground tick after being hidden is suppressed (resume gap)", () => {
+  // iOS resume: the suspended timer fires with a huge drift before the visible event flips `hidden`
+  // back to false. `wasHidden` (set when the tab went hidden) suppresses it.
+  assert.equal(detectors.shouldReportStall(1010758, false, true), false);
+});
+
 // --- enableDetectors ------------------------------------------------------
 
 test("enableDetectors: js returns one detector with a stop()", () => {

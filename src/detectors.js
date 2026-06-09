@@ -186,15 +186,34 @@ export const stallDriftMs = (prevTs, nowTs, intervalMs) =>
   Math.max(0, nowTs - prevTs - intervalMs);
 
 /**
+ * Whether a watchdog tick should report a main-thread stall: the lateness crosses the threshold AND
+ * the tab is foreground AND it wasn't hidden since the previous tick. A hidden tab has its timers
+ * throttled (mobile Safari → ~1 tick/min) or fully suspended, so the "drift" is backgrounding, not a
+ * hang. `wasHidden` covers the resume case where the suspended timer fires before the visibility
+ * event flips `hidden` back to false. Pure (unit-tested directly).
+ * @param {number} driftMs
+ * @param {boolean} hidden    tab is hidden right now
+ * @param {boolean} wasHidden tab was hidden at any point since the last tick (suppress the resume gap)
+ * @returns {boolean}
+ */
+export const shouldReportStall = (driftMs, hidden, wasHidden) =>
+  !hidden && !wasHidden && driftMs >= STALL_MS;
+
+/**
  * JS / general detector: uncaught errors, unhandled rejections, and a main-thread watchdog (iOS
  * Safari has no `PerformanceObserver('longtask')`, so hang detection uses `setInterval` drift). The
  * error name is folded into the breadcrumb text so a `RangeError` surfaces as an `"oom"` reason on
  * the next load via `inference.REASON_SIGNALS`.
+ *
+ * The watchdog ignores hidden-tab time: a backgrounded tab throttles/suspends timers, so its drift
+ * is backgrounding, not a hang. Ticks while `document.hidden` are skipped, and the drift baseline is
+ * reset across any visibility change so the first foreground tick doesn't count time spent hidden.
  * @param {DetectorContext} ctx
  * @returns {Detector}
  */
 const createJsDetector = (ctx) => {
   const win = getWindow();
+  const doc = win ? win.document : null;
 
   /** @param {ErrorEvent} e */
   const onError = (e) => {
@@ -222,16 +241,33 @@ const createJsDetector = (ctx) => {
 
   /** @type {ReturnType<typeof setInterval> | null} */
   let watchdog = null;
+  let last = Date.now();
+  // Whether the tab has been hidden since the last foreground watchdog tick. Set the instant the tab
+  // goes hidden — that `visibilitychange` fires before iOS suspends the page — so on resume the
+  // suspended timer's huge "drift" is suppressed even though it fires before the visible event flips
+  // `document.hidden` back to false. The first foreground tick consumes the flag.
+  let wasHidden = false;
+  const onVisibility = () => {
+    if (doc && doc.hidden) {
+      wasHidden = true;
+    }
+  };
 
   if (win) {
     win.addEventListener("error", onError);
     win.addEventListener("unhandledrejection", onRejection);
-    let last = Date.now();
+    if (doc) {
+      doc.addEventListener("visibilitychange", onVisibility);
+    }
     watchdog = setInterval(() => {
       const now = Date.now();
       const drift = stallDriftMs(last, now, WATCHDOG_MS);
       last = now;
-      if (drift >= STALL_MS) {
+      const hidden = !!(doc && doc.hidden);
+      const report = shouldReportStall(drift, hidden, wasHidden);
+      // A hidden tick keeps the flag set (still backgrounded); the first foreground tick clears it.
+      wasHidden = hidden;
+      if (report) {
         ctx.breadcrumb(`main-thread stall ${Math.round(drift)}ms`, {
           signal: "hang",
           driftMs: Math.round(drift),
@@ -246,6 +282,9 @@ const createJsDetector = (ctx) => {
       if (win) {
         win.removeEventListener("error", onError);
         win.removeEventListener("unhandledrejection", onRejection);
+        if (doc) {
+          doc.removeEventListener("visibilitychange", onVisibility);
+        }
       }
       if (watchdog !== null) {
         clearInterval(watchdog);
