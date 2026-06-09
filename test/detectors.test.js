@@ -559,14 +559,11 @@ test("shouldFirePressure: a PARTIAL descent lowers the watermark so a re-rise re
 /**
  * Install a fake `performance.memory`, returning a cleanup. Mutate the returned object's
  * `usedJSHeapSize` between samples to move the ratio.
- * @param {{ usedJSHeapSize: number, jsHeapSizeLimit: number, totalJSHeapSize?: number }} mem
+ * @param {{ usedJSHeapSize: number, jsHeapSizeLimit: number }} mem
  */
 const fakeHeap = (mem) => {
   // Define the SAME object reference the caller holds, so mutating `mem.usedJSHeapSize` between
   // samples is visible to readJsHeap().
-  if (mem.totalJSHeapSize === undefined) {
-    mem.totalJSHeapSize = mem.usedJSHeapSize;
-  }
   Object.defineProperty(performance, "memory", {
     value: mem,
     configurable: true,

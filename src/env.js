@@ -54,7 +54,8 @@ export const getNavType = () => {
  * JS heap usage from the non-standard `performance.memory` (Chromium only — absent on iOS Safari
  * and Firefox). Cheap and synchronous, so it's the hot-path source for the memory sampler. The
  * `usedBytes/limitBytes` ratio is the only real memory-pressure proxy the platform offers.
- * @returns {{ usedBytes: number, totalBytes: number, limitBytes: number } | null}
+ * (`totalJSHeapSize` is deliberately omitted — nothing consumes it, and it's not reliably present.)
+ * @returns {{ usedBytes: number, limitBytes: number } | null}
  */
 export const readJsHeap = () => {
   try {
@@ -68,7 +69,6 @@ export const readJsHeap = () => {
     ) {
       return {
         usedBytes: mem.usedJSHeapSize,
-        totalBytes: mem.totalJSHeapSize,
         limitBytes: mem.jsHeapSizeLimit,
       };
     }

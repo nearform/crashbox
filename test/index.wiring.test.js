@@ -472,11 +472,7 @@ test("memory detector: a fresh episode after recovery warns again (no peak latch
   // The headline regression, through the real `memory` detector + its sampling interval. Fake
   // Chromium's `performance.memory` (absent in Node) so the detector activates, then walk usage up,
   // back to calm, and up again — the second episode must surface even though it's below the peak.
-  const heap = {
-    usedJSHeapSize: 100,
-    totalJSHeapSize: 100,
-    jsHeapSizeLimit: 1000,
-  };
+  const heap = { usedJSHeapSize: 100, jsHeapSizeLimit: 1000 };
   Object.defineProperty(performance, "memory", {
     value: heap,
     configurable: true,
