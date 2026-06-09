@@ -535,6 +535,23 @@ test("shouldFirePressure: rising fires, steady is suppressed until refire, nomin
   assert.equal(detectors.shouldFirePressure(1, 43000, state, REFIRE), true);
 });
 
+test("shouldFirePressure: a PARTIAL descent lowers the watermark so a re-rise re-fires (no all-time-peak latch)", () => {
+  const state = { lastRank: 0, lastFireTs: 0 };
+  const REFIRE = 30000;
+  // up to 'critical' (rank 3)
+  assert.equal(detectors.shouldFirePressure(3, 1000, state, REFIRE), true);
+  // drop to 'serious' (rank 2): does NOT fire, but the watermark follows down to 2…
+  assert.equal(detectors.shouldFirePressure(2, 2000, state, REFIRE), false);
+  assert.equal(
+    state.lastRank,
+    2,
+    "watermark tracks the current level, not the peak",
+  );
+  // …so a fresh rise back to 'critical' is a rising edge again and fires (the latch bug would
+  // have suppressed this because 3 was already the session peak).
+  assert.equal(detectors.shouldFirePressure(3, 3000, state, REFIRE), true);
+});
+
 // --- memory sampler -------------------------------------------------------
 // performance.memory is absent in Node, so fake it. Drive ticks via the exposed sample(now)
 // rather than the real interval (matches the suite's "don't fake time" convention).
@@ -626,12 +643,26 @@ test("memory sampler: crosses thresholds once per rising level (hysteresis), wit
     assert.equal(fires.length, 2);
     assert.equal(fires[1].level, "critical");
 
-    heap.usedJSHeapSize = 100; // drop to nominal re-arms
+    // Drop to nominal: the sampler forwards the descent (silently — no breadcrumb) so the shared
+    // downstream gate re-arms. A direct callback like this test's sees it; the central emitter
+    // swallows it (rank 0). This forward is what makes the *next* episode reachable.
+    heap.usedJSHeapSize = 100;
     sampler.sample?.(5000);
-    heap.usedJSHeapSize = 880; // re-rise to serious → fires again
-    sampler.sample?.(6000);
     assert.equal(fires.length, 3);
-    assert.equal(fires[2].level, "serious");
+    assert.equal(
+      fires[2].level,
+      "nominal",
+      "descent is forwarded to re-arm downstream",
+    );
+    assert.ok(
+      !crumbs.some((c) => c.msg.includes("nominal")),
+      "a descent does not breadcrumb",
+    );
+
+    heap.usedJSHeapSize = 880; // re-rise to serious → fires again (the latch-bug regression guard)
+    sampler.sample?.(6000);
+    assert.equal(fires.length, 4);
+    assert.equal(fires[3].level, "serious");
   } finally {
     cleanup();
   }

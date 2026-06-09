@@ -151,8 +151,11 @@ export const scaledFloorBytes = (budgetBytes, fraction, fixedFloorBytes) =>
  * Hysteresis gate shared by the sampler, the heartbeat pull source, and the central emitter — so a
  * level that holds steady warns once (not every tick). Fires on a RISING level, or on a steady
  * elevated level once `refireMs` has elapsed (so sustained pressure still leaves periodic markers
- * rather than going silent forever). A drop to `nominal` (rank 0) re-arms. Mutates `state` in place
- * on a fire/re-arm. Pure aside from that mutation (unit-tested directly).
+ * rather than going silent forever). Any DROP (incl. to `nominal`/rank 0) lowers the watermark
+ * WITHOUT firing — so a later rise from the new, lower level fires again. Tracking the current
+ * level rather than the session peak is what lets a fresh episode after a recovery (or a relapse to
+ * a level below an earlier peak) warn at all. Mutates `state` in place on a fire/re-arm. Pure aside
+ * from that mutation (unit-tested directly).
  * @param {number} rank
  * @param {number} now
  * @param {{ lastRank: number, lastFireTs: number }} state
@@ -160,12 +163,14 @@ export const scaledFloorBytes = (budgetBytes, fraction, fixedFloorBytes) =>
  * @returns {boolean}
  */
 export const shouldFirePressure = (rank, now, state, refireMs) => {
-  if (rank === 0) {
-    state.lastRank = 0;
+  if (rank < state.lastRank) {
+    state.lastRank = rank; // descended — follow pressure down so a later rise re-fires
     return false;
   }
   const rising = rank > state.lastRank;
-  const stale = rank === state.lastRank && now - state.lastFireTs >= refireMs;
+  // `rank > 0` keeps a steady `nominal` (rank 0) from ever firing on the refire path.
+  const stale =
+    rank === state.lastRank && rank > 0 && now - state.lastFireTs >= refireMs;
   if (!rising && !stale) {
     return false;
   }
@@ -691,9 +696,10 @@ const createWasmDetector = (ctx) => {
  * when the used/limit ratio crosses a threshold — the only *real* (not growth-proxy) pressure signal
  * the platform offers. Where `performance.memory` is absent (iOS Safari, Firefox, Node) it's a
  * no-op, so the WASM detector remains the fallback there. Hysteresis (`shouldFirePressure`) keeps a
- * steady level from spamming; an infrequent `measureUserAgentSpecificMemory()` cross-check enriches
- * the next fire with a cross-worker total when available. Allocation-light: the hot path is two
- * reads + a divide + a compare; an info object is built only on a fire.
+ * steady level from spamming the breadcrumb trail; an infrequent `measureUserAgentSpecificMemory()`
+ * cross-check enriches the next fire with a cross-worker total when available. Allocation-light: the
+ * hot path is two reads + a divide + a compare; an info object is built only on a level CHANGE (a
+ * rise/refire fire, or a descent forwarded to re-arm the shared downstream gate — see below).
  * @param {DetectorContext} ctx
  * @returns {Detector}
  */
@@ -733,7 +739,22 @@ const createMemorySampler = (ctx) => {
     const ratio = heap.usedBytes / heap.limitBytes;
     const level = ratioToLevel(ratio, thresholds);
     const rank = levelRank(level);
+    const prevRank = gate.lastRank;
     if (!shouldFirePressure(rank, now, gate, MEMORY_REFIRE_MS)) {
+      // Not a rising-edge/refire. If pressure DESCENDED this tick, still forward the lower level
+      // (silently — no breadcrumb) so the downstream central gate, which `onMemoryPressure` shares,
+      // tracks the recovery and a later rise can re-fire. Without this the central gate would latch
+      // at the session peak and go silent for every subsequent lower-severity episode. A steady,
+      // unchanged level is dropped entirely — that throttling is the breadcrumb-spam guard.
+      if (rank < prevRank) {
+        firePressureCb(ctx, {
+          source: "performance.memory",
+          level,
+          ratio,
+          usedBytes: heap.usedBytes,
+          limitBytes: heap.limitBytes,
+        });
+      }
       if (rank > 0) {
         maybeMeasureAgent(now); // elevated but throttled — keep the cross-check warm
       }
