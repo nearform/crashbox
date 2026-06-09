@@ -158,6 +158,14 @@ $ npx serve
         justify-content: center;
         gap: 16px;
       }
+      /* npm + GitHub release badges, centered under the header tagline. */
+      .badge-row {
+        margin-top: 20px;
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
       /* GitHub icon link in the header — circular badge that tints on hover. */
       .github-link {
         display: inline-flex;
@@ -559,12 +567,30 @@ $ npx serve
               </div>
               <p>
                 Local-first crash black box for the browser. Trigger a crash,
-                let the tab die, reload, and confirm the recovered record below.
+                reload, and recover the record.
               </p>
-              <p style=${{ fontSize: "0.9em", color: "#718096" }}>
-                The red <em>kill</em> triggers only hard-kill memory-limited
-                devices (iOS); on desktop, most often tabs survive.
-              </p>
+              <div className="badge-row">
+                <a
+                  href="https://www.npmjs.com/package/crashbox"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <img
+                    src="https://badgen.net/npm/v/crashbox?icon=npm"
+                    alt="npm version"
+                  />
+                </a>
+                <a
+                  href="https://github.com/nearform/crashbox/releases"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <img
+                    src="https://badgen.net/github/release/nearform/crashbox?icon=github"
+                    alt="GitHub release"
+                  />
+                </a>
+              </div>
             </div>
 
             ${recovered
@@ -598,6 +624,8 @@ ${recovered.breadcrumbs
                   <p>
                     Clean load (or a clean reload / iOS discard). Trigger a hard
                     kill below, then reload to see the recovered record here.
+                    ${" "}<em>Note</em> that the red "kill" buttons only land on
+                    memory-limited devices (iOS); desktop tabs usually survive.
                   </p>
                 </div>`}
 

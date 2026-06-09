@@ -1,5 +1,9 @@
 # crashbox 💥
 
+[![npm version](https://badgen.net/npm/v/crashbox?icon=npm)](https://www.npmjs.com/package/crashbox)
+[![GitHub release](https://badgen.net/github/release/nearform/crashbox?icon=github)](https://github.com/nearform/crashbox/releases)
+[![GitHub CI](https://badgen.net/github/checks/nearform/crashbox?icon=github)](https://github.com/nearform/crashbox/actions)
+
 Local-first crash black box for the browser: survives hard tab kills (WebGPU,
 WASM, in-browser OOM) and surfaces the recovered state on next load.
 
