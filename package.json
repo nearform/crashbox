@@ -1,7 +1,7 @@
 {
   "name": "crashbox",
   "private": false,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Local-first crash black box for the browser: survives hard tab kills (WebGPU, WASM, OOM) and surfaces the recovered state on next load.",
   "license": "MIT",
   "author": "Ryan Roemer <ryan.roemer@nearform.com>",
